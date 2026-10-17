@@ -12,7 +12,7 @@ MEDIA_ORIGIN = "https://janky-studio-api.YOUR_SUBDOMAIN.workers.dev"
 [[d1_databases]]
 binding = "DB"
 database_name = "janky-studio-db"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "414e894f-b146-493f-b93f-37985969e2d9"
 
 [[r2_buckets]]
 binding = "MEDIA"
