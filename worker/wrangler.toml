@@ -1,0 +1,22 @@
+name = "janky-studio-api"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[vars]
+# docs/config.js のURLを指定。CORSの許可先になります。
+SITE_ORIGIN = "https://YOUR_USER.github.io"
+# デプロイしたWorkerの公開URL（LINE/Bufferが動画を取得するため）
+MEDIA_ORIGIN = "https://janky-studio-api.YOUR_SUBDOMAIN.workers.dev"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "janky-studio-db"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "janky-studio-media"
+
+[triggers]
+crons = ["*/5 * * * *"]

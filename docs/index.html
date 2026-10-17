@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta name="theme-color" content="#101827"/>
+  <title>JANKY Studio — 投稿管理</title>
+  <link rel="stylesheet" href="./styles.css"/>
+  <script src="./config.js"></script>
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+<div id="app">
+  <aside class="sidebar">
+    <a class="brand" href="#dashboard"><span class="brandmark"><span class="brand-play"></span></span><span><strong>JANKY<span class="brand-dot">.</span></strong><small>CREATOR STUDIO</small></span></a>
+    <div class="side-caption">WORKSPACE</div>
+    <nav class="nav" aria-label="メインナビゲーション">
+      <button class="nav-item active" data-view="dashboard"><span class="nav-icon">▦</span> ダッシュボード</button>
+      <button class="nav-item" data-view="calendar"><span class="nav-icon">▦</span> 投稿カレンダー</button>
+      <button class="nav-item" data-view="posts"><span class="nav-icon">▤</span> 投稿一覧</button>
+      <button class="nav-item" data-view="line"><span class="nav-icon">◉</span> LINE配信</button>
+      <button class="nav-item" data-view="history"><span class="nav-icon">◷</span> 通知・履歴</button>
+    </nav>
+    <div class="side-caption tools-caption">SETTINGS</div>
+    <nav class="nav"><button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span> 設定</button></nav>
+    <div class="side-bottom">
+      <div class="status-indicator"><span class="status-led"></span><div><strong id="connectionLabel">ローカルデモ</strong><small id="connectionSub">この端末に保存中</small></div></div>
+      <div class="side-footer">v1.0 · personal creator console</div>
+    </div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar">
+      <div class="top-left"><button id="menuButton" class="mobile-menu icon-button" aria-label="メニュー">☰</button><span class="crumb">WORKSPACE</span><span class="crumb-slash">/</span><span id="crumbCurrent">Overview</span></div>
+      <div class="top-right"><span class="today-date" id="todayLabel"></span><span class="top-separator"></span><span id="modeBadge" class="mode-badge">DEMO MODE</span><button class="avatar" title="管理者">J</button></div>
+    </header>
+    <main id="content" class="content" tabindex="-1"></main>
+  </div>
+</div>
+<div id="toastContainer" class="toast-container" aria-live="polite"></div>
+<div id="modalHost"></div>
+</body>
+</html>

@@ -1,1 +1,194 @@
-# janky-studio
+# JANKY Studio — SNS投稿管理サイト
+
+**初心者向け接続手順は [SETUP_GUIDE_JA.md](./SETUP_GUIDE_JA.md) を参照してください。**
+
+個人クリエイター「じゃんきー。」のための、縦動画・横動画の投稿予約サイトです。
+
+**現時点のバージョン 1.0:** 縦動画の投稿ルールを実装。横動画は入力・予約のみで、公開ロジックは未設定です。
+
+## 何が使える？
+
+| 機能 | デモモード | Cloudflare本番モード |
+|---|---|---|
+| 投稿セットの登録/編集/削除 | ○ | ○ |
+| 予約カレンダー・空き日表示 | ○ | ○ |
+| 本編・プレビュー動画の登録 | IndexedDB に保存 | R2 に分割アップロード |
+| ローラータグ・ミニタグ3個 | ○ | ○ |
+| SNS別の文章プレビュー | ○ | ○ |
+| X用の本文コピー・動画保存・投稿済み管理 | ○ | ○ |
+| LINE配信数の動的計算 | 手動通数で試算 | LINE APIの概算実績＋内部送信記録 |
+| Buffer Shorts/Instagram/TikTok の予約 | × | **連携設定後に予約登録** |
+| LINE人数指定ランダム配信 | × | **連携設定後に送信** |
+| 自発的な全員通知（月1回確保） | 操作シミュレーション | LINE Broadcast（テキスト） |
+| 完了した動画を3日後に削除 | 未実装 | 定期削除（全SNS+X完了後） |
+| 投稿失敗の通知 | 操作ログのみ | 管理画面ログ＋任意のDiscord Webhook |
+
+**絶対に注意:** ダウンロード直後はデモモードです。どのSNSにも投稿しません。動画を含むデータはそのブラウザに保存されるため、ブラウザデータを消すと失われます。
+
+## 1. 今すぐ試す（無料・セットアップ不要）
+
+`docs/index.html` を開くか、`docs` フォルダでローカルサーバーを起動してください。
+
+```bash
+cd docs
+python3 -m http.server 8000
+# http://localhost:8000 にアクセス
+```
+
+投稿カレンダー、新規動画の入力、文面のプレビュー、Xの投稿補助、LINE通数見積りが使えます。ブラウザの IndexedDB を使用するため動画ファイルの保存容量にはブラウザ側の制限があります。
+
+## 2. Cloudflare側の作成
+
+前提: Cloudflareアカウント、Node.js、Wrangler CLI。**R2は無料枠があっても、利用にはアカウントの支払い設定が求められる場合があります。使用量超過には注意してください。**
+
+```bash
+cd worker
+npm install
+npx wrangler login
+npx wrangler d1 create janky-studio-db
+npx wrangler r2 bucket create janky-studio-media
+```
+
+`wrangler d1 create` で表示された `database_id` を `worker/wrangler.toml` の `REPLACE_WITH_D1_DATABASE_ID` に入れます。`SITE_ORIGIN` は GitHub Pages のオリジン（例 `https://example.github.io`、**末尾にリポジトリパスを付けない**）、`MEDIA_ORIGIN` は自分のWorkersの公開URLに変更します。
+
+D1にテーブルを作成します。
+
+```bash
+npx wrangler d1 execute janky-studio-db --remote --file=schema.sql
+```
+
+### 管理者トークンを設定
+
+**32バイト以上の推測できないランダム文字列**を作り、シークレット登録します（トークンをファイルやGitHubに書かないこと）。
+
+```bash
+# 作成例 (Mac/Linux)
+openssl rand -hex 32
+npx wrangler secret put ADMIN_TOKEN
+```
+
+ほかのシークレットは、連携するときだけ登録します。
+
+```bash
+npx wrangler secret put BUFFER_API_KEY
+npx wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
+# 任意: Discordへの失敗通知
+npx wrangler secret put DISCORD_WEBHOOK_URL
+```
+
+※ LINE Messaging APIのチャネルアクセストークンを使います。チャネルシークレットや LINE Login のキーとは別です。
+
+```bash
+npx wrangler deploy
+```
+
+次に `docs/config.js` の `apiBase` をデプロイされた Worker の URL に指定します。
+
+```js
+window.APP_CONFIG = {
+  apiBase: 'https://janky-studio-api.EXAMPLE.workers.dev',
+};
+```
+
+`docs/` 内を GitHub Pages に公開すれば、ブラウザから管理トークンで接続できます。**GitHub Pagesは管理画面の画面ファイルだけを公開します。認証されていない人は投稿データや動画を管理できません。**
+
+ローカル開発で別オリジンから Worker にアクセスしたい場合は、Cloudflare側の `ALLOW_LOCAL_DEV = "true"` を開発時のみ追加できます。本番では使わないでください。
+
+## 3. Buffer接続
+
+1. [Buffer API](https://developers.buffer.com/) の個人APIキーを取得し、Workerの `BUFFER_API_KEY` に設定。
+2. Buffer上で YouTube Shorts、Instagram Reels、TikTok を接続。
+3. サイト「設定」に Buffer Organization ID と各チャンネルIDを入力。
+4. 「Buffer予約登録を有効化」と「自動投稿処理を有効化」をONにする。
+
+Workerは5分ごとの定期処理でLINEの進捗などを確認します。Buffer APIへの問い合わせは通常6時間おき、公開予定時刻の前後45分では約30分おきに限定し、無料APIの利用上限を考慮して、各Bufferチャンネルの予約枠10件以内に収まるようサイト内の予約をBuffer GraphQL APIに登録します。**投稿時刻は日本時間（JST）からUTCへ変換します。** 既にBuffer側にある予約も枠数に考慮します。ただし、Buffer APIのプラン上限や各SNS連携条件は変更されることがあります。
+
+投稿登録の成否がネットワークタイムアウトなどで不明になった場合は `要確認` のまま停止します。二重投稿を防ぐため、自動再試行しません。管理画面のログとBufferの投稿一覧を確認してください。
+
+Bufferの `sent` ステータスを取得できると「投稿確認済み」へ反映します。**YouTube Shortsの公開リンクは、Buffer API経由で必ずしも取得できません。** 本サイトはリンクが確定するまでLINE宣伝を送らず、必要なら投稿セットの「YouTube Shortsの公開URL」に手動貼付します。Shortsの公開確認チェックも利用できます。
+
+投稿先固有の制限（TikTok/Instagramの音楽権利、動画形式、Bufferの接続方式、YouTube Shorts適格性など）は本番でテストが必要です。
+
+## 4. LINE接続
+
+1. LINE公式アカウントでMessaging APIチャネルを設定します。
+2. チャネルアクセストークンをWorkersの `LINE_CHANNEL_ACCESS_TOKEN` に登録。
+3. 「設定」で推定友だち数（月初18人なら18）・月間上限200通を確認し、LINE送信と自動処理をONにします。
+4. プレビュー動画は **MP4** を使い、動画にサムネイル画像を作成できたことを確認します。
+
+### ランダム配信
+
+縦動画プレビュー宣伝は `narrowcast` + `limit.max` で、公式アカウントの友だち全体から**ランダムに人数を選びます**。公平抽選・送信対象者リスト・個別除外は**この版では実装しません**。LINEの制限により、条件付きターゲティングは別途制限を受けます。
+
+予約日時以降、Shortsの公開URLと公開状態を確認して初めてLINEを送信します。配信の実績は非同期で確定するため、処理中の配信を重複実行しない設計です。
+
+配信枠：
+
+`縦動画の割当可能数 = max(0, 月間枠 - 使用済み - 今後の横動画予約件数×友だち数 - 自発的全員通知の確保枠)`
+
+これを残りの縦動画宣伝予定数で割って `floor` した人数を上限にします。余りは翌日の再計算へ回します。毎月1回分の自発的な全員通知（友だち全員向け）を確保し、サイトから送信すると確保を解除します。友だち数はLINEの前日統計の `followers - blocks` を利用した**推定値**で毎日更新します。
+
+**注意:** LINE APIの使用通数は概算で遅延があり、配信途中に予約枠を一時占有する場合があります。完全な無料上限保証や月末ぴったり200通を保証するものではありません。送信失敗時はログ＋任意のDiscordへ通知します。
+
+### LINE動画の3日後削除
+
+LINEへの動画メッセージは外部公開MP4 URLを必要とし、本サイトのR2動画をそのURLとして渡します。**3日後にR2ファイルを削除すると、既に送ったLINEメッセージを後から再生できなくなる可能性があります。** 必要なら保存期間を変更してください。
+
+## 5. 縦動画の投稿ルール（確定）
+
+| プラットフォーム | 動画 | 文章 |
+|---|---|---|
+| YouTube通常動画 | 投稿なし | — |
+| YouTube Shorts | 本編 | タイトル + 改行 + ローラータグ |
+| Instagram Reels | 本編 | タイトル + スペース + ミニタグ3個 |
+| TikTok | 本編 | タイトル + スペース + ミニタグ3個 |
+| X | プレビュー・手動 | 下記テンプレート |
+| LINE | プレビュー・人数指定ランダム | 下記テンプレート |
+
+X:
+
+```
+じゃんきー。がshortsを更新しました！
+
+[タイトル]
+[Youtube shortsのリンク]
+
+[ミニタグ]
+```
+
+LINE:
+
+```
+じゃんきー。がshortsを更新しました！
+
+[タイトル]
+[Youtube shortsのリンク]
+```
+
+## 6. 投稿失敗・削除・安全運用
+
+- 投稿失敗時は管理画面の「通知・履歴」にエラーを記録し、`DISCORD_WEBHOOK_URL` を設定するとDiscordにも送ります。失敗した動画は自動削除しません。
+- すべてのSNSで公開確認が取れ、Xが手動で投稿済み、LINEが送信済みとなった時点から指定日数（初期値3日）を数えます。
+- その後、定期実行で本編・プレビュー・サムネイルをR2から削除します。タイトル、公開URL、投稿履歴は保持します。
+- 投稿がない日付は空白のまま。予約を自動で前倒ししません。
+- Bufferに登録済みの投稿内容をサイトから無理に書き換えず、誤投稿を防ぐためエラーで止めます。
+- Xへは投稿せず、コピー用文章・プレビュー動画・投稿済みチェックを提供します。
+
+## 実装状況と残課題
+
+この配布物は**サイト本体＋Cloudflare APIのソースコード**です。トークンやSNS接続情報は含んでいません。**実アカウントへの投稿はまだ検証していません。**
+
+残課題：
+1. Buffer接続アカウントごとの実際の動画投稿仕様・連携制限とYouTube Shortsの公開URL自動取得方法。
+2. 横動画の詳細な投稿ルール・YouTube通常動画へのアップロード方式。
+3. LINEの動画再生が削除後にどうなるかの実機検証。
+4. Buffer予約が `review` になったときの、外部確認後の安全な手動復旧UI。
+5. 本番環境での end-to-end テスト、外部APIの利用規約・料金確認。
+
+---
+
+公式ドキュメント：
+- [Buffer GraphQL API](https://developers.buffer.com/examples/create-video-post.html)
+- [LINE Messaging API - narrowcast](https://developers.line.biz/ja/docs/messaging-api/sending-messages/)
+- [LINE API reference](https://developers.line.biz/ja/reference/messaging-api/)
+- [Cloudflare R2料金](https://developers.cloudflare.com/r2/pricing/)
