@@ -7,7 +7,7 @@ workers_dev = true
 # docs/config.js のURLを指定。CORSの許可先になります。
 SITE_ORIGIN = "https://jankyjanky0920.github.io"
 # デプロイしたWorkerの公開URL（LINE/Bufferが動画を取得するため）
-MEDIA_ORIGIN = "https://janky-studio-api.YOUR_SUBDOMAIN.workers.dev"
+MEDIA_ORIGIN = "https://janky-studio-api.jankyjanky70.workers.dev"
 
 [[d1_databases]]
 binding = "DB"
