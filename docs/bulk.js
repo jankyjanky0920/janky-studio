@@ -1,3 +1,19 @@
+export function planBulkRange({start,end,daily,times,now=Date.now(),existing=[]}){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(start)||!/^\d{4}-\d{2}-\d{2}$/.test(end)||end<start)throw new Error('終了日は開始日以降を選んでください');
+  if(![2,3].includes(Number(daily)))throw new Error('1日2本または3本を選んでください');
+  const hours=parseHours(times,Number(daily));
+  const days=Math.round((Date.parse(end+'T00:00:00Z')-Date.parse(start+'T00:00:00Z'))/86400000)+1;
+  if(!Number.isInteger(days)||days<1||days>366)throw new Error('指定期間は最大366日です');
+  const occupied=new Set(existing.map(p=>p.date+' '+p.time));
+  const slots=[],used=[],past=[];
+  for(let d=0;d<days;d++)for(const time of hours){
+    const day=isoDay(start,d),entry={date:day,time},id=day+' '+time;
+    if(occupied.has(id))used.push(entry);
+    else if(Date.parse(day+'T'+time+':00+09:00')<=now+15*60*1000)past.push(entry);
+    else slots.push(entry);
+  }
+  return {days,total:days*Number(daily),booked:used.length,expired:past.length,available:slots.length,slots,used,past};
+}
 /* Bulk scheduling: one Buffer channel per batch; no SNS dispatch until explicitly enabled. */
 const htmlEscape = value => String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const dayJst = () => new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
@@ -12,39 +28,32 @@ function parseHours(text,n){
 function validMini(value){return /^#[^\s#]+(?:\s+#[^\s#]+){2}$/.test(value.trim());}
 export function createBulkManager({getStore,getPosts,notify,onSaved}){
   let files=[],items=[],busy=false;
-  let state={channel:'tiktok',start:nextJst(),daily:3,times:'10:00,15:00,20:00',mini:'#歌い手 #歌ってみた #shorts',roller:''};
+  let state={channel:'tiktok',start:nextJst(),end:isoDay(nextJst(),6),daily:3,times:'10:00,15:00,20:00',mini:'#歌い手 #歌ってみた #shorts',roller:''};
   const labels={tiktok:'TikTok',instagram:'Instagram Reels',shorts:'YouTube Shorts'};
   function pull(){
-    const ids={channel:'bulkChannel',start:'bulkStart',daily:'bulkDaily',times:'bulkTimes',mini:'bulkMini',roller:'bulkRoller'};
+    const ids={channel:'bulkChannel',start:'bulkStart',end:'bulkEnd',daily:'bulkDaily',times:'bulkTimes',mini:'bulkMini',roller:'bulkRoller'};
     for(const [name,id] of Object.entries(ids)){const el=document.getElementById(id);if(el)state[name]=el.value;}
     state.daily=Number(state.daily);
   }
   function existingOn(channel,date){
     return getPosts().filter(p=>p.stage==='scheduled'&&p.date===date&&p.kind==='vertical'&&(p.targets?.[channel]!==false)&&p.statuses?.[channel]!=='skipped');
   }
+  function getSummary(){
+    return planBulkRange({...state,existing:getPosts().filter(p=>p.kind==='vertical'&&p.stage==='scheduled'&&p.targets?.[state.channel]!==false&&p.statuses?.[state.channel]!=='skipped')});
+  }
   function getDates(){
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(state.start)||state.start<dayJst())throw new Error('開始日は今日以降にしてください');
-    if(![2,3].includes(state.daily))throw new Error('1日2本または3本を選んでください');
-    const slots=parseHours(state.times,state.daily);
-    const used=new Set(),plans=[],limit=Date.now()+15*60*1000;let cursor=0;
-    for(const item of items){
-      if(item.done){used.add(item.date+' '+item.time);plans.push({date:item.date,time:item.time});continue;}
-      let found=false;
-      for(let offset=cursor;offset<366&&!found;offset++){
-        const date=isoDay(state.start,offset),existing=existingOn(state.channel,date);
-        if(existing.length+Array.from(used).filter(v=>v.startsWith(date+' ')).length>=state.daily)continue;
-        for(const time of slots){
-          if(new Date(date+'T'+time+':00+09:00').getTime()<=limit)continue;
-          if(existing.some(p=>p.time===time)||used.has(date+' '+time))continue;
-          used.add(date+' '+time);plans.push({date,time});cursor=offset;found=true;break;
-        }
-      }
-      if(!found)throw new Error('365日以内に空いている予約枠が見つかりません');
-    }
-    return plans;
+    const open=getSummary().slots;
+    if(items.filter(i=>!i.done).length>open.length)throw new Error('指定期間の空き枠は'+open.length+'件です。動画を減らすか期間を延ばしてください');
+    let cursor=0;return items.map(item=>item.done?{date:item.date,time:item.time}:open[cursor++]);
   }
   function view(){
     const intro='<div class="notice">過去のYouTube ShortsをTikTokに移す場合は「TikTokのみ」を選択します。ほかのSNS、X、LINEには投稿しません。無料Bufferのキューは各SNS最大10件なので、実行を有効にした後は空き枠へ順番に補充されます。</div>';
+    let summaryText='';
+    try{const summary=getSummary();
+      summaryText='<div class="notice" style="margin:12px 0"><strong>指定期間：'+summary.days+'日 × '+state.daily+'本 = 合計 '+summary.total+'枠</strong>'
+      +'<div class="small">同時刻の予約：'+summary.booked+'枠 / 過去・直前：'+summary.expired+'枠 / 新規可能：'+summary.available+'枠</div>'
+      +'<div class="small">今回選択：'+items.filter(i=>!i.done).length+'本。不足分は同じ期間で後から追加できます。</div></div>';
+    }catch(e){summaryText='<div class="notice">期間設定エラー：'+htmlEscape(e.message)+'</div>';}
     let table='';
     if(items.length){
       let plan=[],error='';
@@ -65,8 +74,10 @@ export function createBulkManager({getStore,getPosts,notify,onSaved}){
       +'<div class="form-grid"><div class="field"><label>予約先SNS（この1つだけ）</label><select id="bulkChannel">'
       +Object.entries(labels).map(([key,label])=>'<option value="'+key+'" '+(state.channel===key?'selected':'')+'>'+label+'</option>').join('')+'</select></div>'
       +'<div class="field"><label>開始日（日本時間）</label><input type="date" id="bulkStart" min="'+dayJst()+'" value="'+htmlEscape(state.start)+'"/></div>'
+      +'<div class="field"><label>終了日（日本時間・含む）</label><input type="date" id="bulkEnd" min="'+htmlEscape(state.start)+'" value="'+htmlEscape(state.end)+'"/></div>'
       +'<div class="field"><label>1日の投稿本数</label><select id="bulkDaily"><option value="2" '+(state.daily===2?'selected':'')+'>2本</option><option value="3" '+(state.daily===3?'selected':'')+'>3本</option></select></div>'
       +'<div class="field"><label>投稿時刻（カンマ区切り）</label><input id="bulkTimes" value="'+htmlEscape(state.times)+'" placeholder="10:00,15:00,20:00"/><span class="hint">この時間帯から順番に割り当て、すでに同じSNSの予約があれば避けます。</span></div></div>'
+      +summaryText
       +'<div class="field"><label>ミニタグ（3個）</label><input id="bulkMini" value="'+htmlEscape(state.mini)+'" placeholder="#歌い手 #歌ってみた #shorts"/></div>'
       +'<div class="field"><label>ローラータグ（Shortsのみ）</label><textarea id="bulkRoller" rows="2" placeholder="#歌い手 #高校生 ...">'+htmlEscape(state.roller)+'</textarea></div></div>'
       +'<div class="form-section"><h2>02 / 過去動画をまとめて選択</h2>'
@@ -77,11 +88,11 @@ export function createBulkManager({getStore,getPosts,notify,onSaved}){
   function render(root){
     if(!root)return;
     root.innerHTML=view();
-    for(const id of ['bulkChannel','bulkStart','bulkDaily','bulkTimes','bulkMini','bulkRoller']){
+    for(const id of ['bulkChannel','bulkStart','bulkEnd','bulkDaily','bulkTimes','bulkMini','bulkRoller']){
       const el=document.getElementById(id);if(!el)continue;
       el.addEventListener('change',()=>{
         const prev=state.daily;pull();
-        if(id==='bulkDaily'&&state.daily!==prev)state.times=state.daily===2?'12:00,19:00':'10:00,15:00,20:00';
+        if(id==='bulkDaily'&&state.daily!==prev)state.times=state.daily===2?'12:00,19:00':'10:00,15:00,20:00';if(id==='bulkStart'&&state.end<state.start)state.end=state.start;
         render(root);
       });
     }
@@ -135,10 +146,10 @@ export function createBulkManager({getStore,getPosts,notify,onSaved}){
     const available=items.filter(i=>!i.done);
     if(!available.length)return notify('すべて保存済みです','info');
     if(available.some(i=>!i.title.trim()))return notify('すべてのタイトルを入力してください','error');
-    const dateSlots=getDates();
+    const dateSlots=getDates();const summary=getSummary();
     const bytes=available.reduce((n,i)=>n+i.file.size,0);
     if(bytes>8*1024**3)return notify('選択動画が合計8GBを超えています。分割して登録してください','error');
-    if(!confirm(available.length+'本の動画をR2にアップロードし、'+labels[state.channel]+'だけの予約を作成します。SNSへの即時投稿は行われません。よろしいですか？'))return;
+    if(!confirm(state.start+'〜'+state.end+'（'+summary.days+'日 × 1日'+state.daily+'本 = 計'+summary.total+'枠）のうち、今回'+available.length+'本をR2にアップロードし、'+labels[state.channel]+'だけに予約します。SNSへの即時投稿は行われません。よろしいですか？'))return;
     busy=true;const btn=document.getElementById('bulkSave');if(btn){btn.disabled=true;btn.textContent='保存中…';}
     const status=document.getElementById('bulkProgress');let completed=0;
     try{
