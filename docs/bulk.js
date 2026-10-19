@@ -28,7 +28,7 @@ export function createBulkManager({getStore,getPosts,notify,onSaved}){
     const slots=parseHours(state.times,state.daily);
     const used=new Set(),plans=[],limit=Date.now()+15*60*1000;let cursor=0;
     for(const item of items){
-      if(item.done){plans.push({date:item.date,time:item.time});continue;}
+      if(item.done){used.add(item.date+' '+item.time);plans.push({date:item.date,time:item.time});continue;}
       let found=false;
       for(let offset=cursor;offset<366&&!found;offset++){
         const date=isoDay(state.start,offset),existing=existingOn(state.channel,date);
