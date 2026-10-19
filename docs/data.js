@@ -39,7 +39,7 @@ function localDate(now = new Date()) {return new Intl.DateTimeFormat('sv-SE',{ti
 export function countBudget(posts, settings, used = null, today = localDate()) {
   const month = today.slice(0,7);
   const planned = posts.filter(p=>p.stage === 'scheduled' && p.date?.startsWith(month));
-  const vertical = planned.filter(p=>p.kind === 'vertical' && !['sent','skipped'].includes(p.statuses?.line));
+  const vertical = planned.filter(p=>p.kind === 'vertical' && p.targets?.line!==false && !['sent','skipped'].includes(p.statuses?.line));
   const horizontal = planned.filter(p=>p.kind === 'horizontal' && !['sent','skipped'].includes(p.statuses?.line));
   const F = Math.max(0, Number(settings.friendCount) || 0);
   const M = Math.max(0, Number(settings.monthlyQuota) || 0);
