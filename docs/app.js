@@ -15,12 +15,12 @@ const kindLabel=k=>k==='horizontal'?'横動画':'縦動画';
 const channels=[{key:'shorts',name:'YouTube Shorts',short:'Shorts'},{key:'instagram',name:'Instagram Reels',short:'Reels'},{key:'tiktok',name:'TikTok',short:'TikTok'},{key:'x',name:'X',short:'X'},{key:'line',name:'公式LINE',short:'LINE'}];
 const baseUrl=(window.APP_CONFIG?.apiBase||'').trim();
 let store=baseUrl?null:new LocalStore();
-let library={collaborators:[],templates:[]};
+let library={templates:[]};
 let posts=[],settings={...DEFAULT_SETTINGS},logs=[],lineUsage={used:0,source:'manual',timestamp:null,friendCount:18};
 let currentView='dashboard',calMonth=today().slice(0,7),selectedDay=today();
 let editor=null,editorFiles={video:null,preview:null,thumbnail:null},editorPreview='shorts',previewUrl='';
 let isSaving=false;
-const libraryManager=createLibraryManager({getLibrary:()=>library,getPosts:()=>posts,saveLibrary:async value=>{library=await store.saveLibrary(value);},notify,onSaved:async()=>{await load();}});
+const libraryManager=createLibraryManager({getLibrary:()=>library,saveLibrary:async value=>{library=await store.saveLibrary(value);},notify,onSaved:async()=>{await load();}});
 const bulkManager=createBulkManager({getStore:()=>store,getPosts:()=>posts,getLibrary:()=>library,notify,onSaved:async()=>{await load();}});
 const DEFAULT_TARGETS={shorts:true,instagram:true,tiktok:true,x:true,line:true};
 function currentTargets(p){return {...DEFAULT_TARGETS,...(p?.targets||{})};}
@@ -70,53 +70,27 @@ function settingsView(){return `${headline('CONFIGURATION','設定','連携先�
 <div class="form-actions"><button type="submit" class="btn btn-primary">設定を保存</button></div></form></section>
 <aside class="stack"><section class="panel" style="padding:24px"><h2 class="card-title">接続状態</h2><div class="kv"><span>動作モード</span><strong>${store.mode==='demo'?'デモ（ローカル）':'本番（Cloudflare）'}</strong></div><div class="kv"><span>データ保存</span><strong>${store.mode==='demo'?'IndexedDB':'D1 + R2'}</strong></div><div class="kv"><span>投稿処理</span><strong>${store.mode==='demo'?'実行されません':settings.autoEnabled?'有効':'停止中'}</strong></div><div class="kv"><span>動画削除</span><strong>完了 ${settings.mediaRetentionDays||3} 日後</strong></div><div class="divider"></div>${store.mode==='demo'?'<div class="notice">docs/config.js の apiBase にCloudflare Worker URLを設定すると、本番モードへ切り替わります。</div>':'<button class="btn btn-white" data-refresh>⟳ 予約処理を確認</button><button class="btn btn-danger" data-logout style="margin-top:8px">ログアウト</button>'}</section><section class="panel" style="padding:24px"><h2 class="card-title">セキュリティ</h2><p class="small muted" style="line-height:1.9">LINE・Bufferのトークンを公開HTMLやGitHubへ書かないでください。Cloudflareのシークレットで管理します。</p>${store.mode==='demo'?'<button class="btn btn-white" id="exportJson">予約データをJSONで書き出す</button>':''}</section></aside></div>`;}
 function buildText(p,key){const title=p.title||'[タイトル]',mini=p.mini||'[ミニタグ]',roller=p.roller||'[ローラータグ]',url=p.shortsUrl||'[Youtube shortsのリンク]';if(key==='shorts')return `${title}\n\n${roller}`;if(key==='instagram'||key==='tiktok')return `${title} ${mini}`;if(key==='x')return `じゃんきー。がshortsを更新しました！\n\n${title}\n${url}\n\n${mini}`;if(key==='line')return `じゃんきー。がshortsを更新しました！\n\n${title}\n${url}`;return '';}
-function collaborationPicker(p){
-  const chosen=new Set(p.collaboratorIds||[]);
-  const people=library.collaborators||[],texts=library.templates||[];
-  const list=people.length?people.map(person=>
-    '<label class="field" style="display:flex;align-items:center;gap:10px;padding:7px 0">'
-      +'<input type="checkbox" class="collabTarget" value="'+escapeHTML(person.id)+'" '+(chosen.has(person.id)?'checked':'')+'/> '
-      +'<strong>'+escapeHTML(person.name)+'</strong>'
-      +'<span class="small muted">'+[person.youtube?'YouTube':'',person.tiktok?'TikTok':'',person.instagram?'Instagram':''].filter(Boolean).join(' / ')+'</span>'
-    +'</label>').join(''):'<div class="notice">コラボ相手が未登録です。左メニュー「プリセット・コラボ」から追加してください。</div>';
-  const actions=p.id?'<div style="margin-top:14px"><h3>招待・メンションの手動対応記録</h3>'
-    +'<p class="small muted">プリセット選択だけでは相手に招待が送られません。該当SNSで操作した後に「対応済み」を記録してください。</p>'
-    +[...chosen].map(personId=>{
-      const person=people.find(x=>x.id===personId);if(!person)return '';
-      const tasks=[
-        ['youtube','YouTube Studio',person.youtube,'https://studio.youtube.com/'],
-        ['tiktok','TikTok',person.tiktok,'https://www.tiktok.com/@'+encodeURIComponent(person.tiktok||'')],
-        ['instagram','Instagram / Buffer',person.instagram,'https://publish.buffer.com/']
-      ].filter(row=>row[2]);
-      return '<div class="notice" style="margin:8px 0"><strong>'+escapeHTML(person.name)+'</strong>'
-        +tasks.map(([platform,label,account,url])=>{
-          const done=(p.collabActions||[]).some(a=>a.personId===personId&&a.platform===platform&&a.status==='done_manually');
-          return '<div class="kv" style="gap:10px;flex-wrap:wrap"><span>'+label+': '+escapeHTML(account)+'</span>'
-            +'<span><button type="button" class="btn btn-white btn-small" data-collab-copy="'+escapeHTML(personId)+'" data-collab-platform="'+platform+'">コピー</button> '
-            +'<a class="btn btn-white btn-small" href="'+escapeHTML(url)+'" target="_blank" rel="noopener noreferrer">開く ↗</a> '
-            +'<button type="button" class="btn btn-white btn-small" data-collab-mark="'+escapeHTML(personId)+'" data-collab-platform="'+platform+'">'+(done?'✓ 対応済み（取消）':'手動対応済みにする')+'</button></span></div>';
-        }).join('')+'</div>';
-    }).join('')+'</div>':'<p class="small muted">下書き保存後に、SNS別の手動招待作業を記録できます。</p>';
-  return '<div class="form-section"><h2>文章・コラボの再利用</h2>'
-    +'<div class="field"><label>文章プリセット</label><select id="postTextPreset"><option value="">選択してください</option>'
-    +texts.map(t=>'<option value="'+escapeHTML(t.id)+'">'+escapeHTML(t.name)+'</option>').join('')
-    +'</select></div><div class="actions" style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap">'
+function textPresetPicker(){
+  const templates=library.templates||[];
+  return '<div class="form-section"><h2>文章プリセット</h2>'
+    +'<div class="field"><label>保存した文章から選択</label><select id="postTextPreset"><option value="">選択してください</option>'
+    +templates.map(t=>'<option value="'+escapeHTML(t.id)+'">'+escapeHTML(t.name)+'</option>').join('')
+    +'</select></div>'
+    +'<div class="actions" style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap">'
     +'<button type="button" class="btn btn-white" id="applyTextPreset">選んだ文章を入力欄へ反映</button>'
     +'<button type="button" class="btn btn-white" id="saveTextPreset">現在の文章を新しいプリセットに保存</button></div>'
-    +'<h3>コラボレーション（複数選択可能）</h3>'
-    +'<p class="small muted">Aさんを選ぶと、YouTube・TikTok・Instagramで登録済みの同一人物に紐付きます。ネイティブ招待は自動送信できないため、下記の手動操作を補助します。</p>'
-    +list+actions+'</div>';
+    +'</div>';
 }
 function editorTemplate(p){const isHorizontal=p.kind==='horizontal';return `${headline('CONTENT EDITOR',p.id?'投稿セットを編集':'新しい投稿セット',p.id?'予約内容を更新できます。':'本編・プレビューと投稿文章をまとめて登録します。','<button class="btn btn-white" data-view="posts">← 一覧に戻る</button>')}
 <div class="form-layout"><section class="panel form-panel"><form id="postForm"><div class="form-section"><h2>01 / 投稿セット</h2><div class="radio-cards"><label class="radio-card ${!isHorizontal?'selected':''}"><input name="kind" type="radio" value="vertical" ${!isHorizontal?'checked':''}/><div><strong>▯ 縦動画</strong><span>Shorts / Reels / TikTok</span></div></label><label class="radio-card ${isHorizontal?'selected':''}"><input name="kind" type="radio" value="horizontal" ${isHorizontal?'checked':''}/><div><strong>▭ 横動画</strong><span>投稿内容は後日設定</span></div></label></div></div>
 <div class="form-section"><h2>02 / 投稿日時とテキスト</h2><div class="form-grid"><div class="field"><label for="pDate">投稿日（日本時間）</label><input id="pDate" type="date" value="${escapeHTML(p.date||today())}" required/></div><div class="field"><label for="pTime">投稿時刻（日本時間）</label><input id="pTime" type="time" value="${escapeHTML(p.time||'19:00')}" required/></div></div><div class="field"><label for="pTitle">タイトル <span style="color:#d26e7e">*</span></label><input id="pTitle" maxlength="150" value="${escapeHTML(p.title)}" placeholder="新しい動画のタイトル" required/></div><div class="field"><label for="pRoller">ローラータグ</label><textarea id="pRoller" placeholder="#歌い手 #高校生 #コント ...">${escapeHTML(p.roller)}</textarea><span class="hint">YouTube Shorts の概要欄に使用。大量のタグを入力できます。</span></div><div class="field"><label for="pMini">ミニタグ（3つ）</label><input id="pMini" value="${escapeHTML(p.mini)}" placeholder="#歌い手 #歌ってみた #shorts"/><span id="miniHint" class="hint">Instagram / TikTok / Xに使用。半角スペースで区切った3つのタグを指定します。</span></div></div>
-${collaborationPicker(p)}
+${textPresetPicker()}
 <div class="form-section"><h2>03 / 動画ファイル</h2><div class="form-grid"><div class="field"><label>本編動画</label><label class="upload ${p.videoKey?'has-file':''}" id="uploadMain"><input type="file" id="videoInput" accept="video/mp4,video/quicktime,video/webm,video/*"/><span class="upload-icon">▸</span><strong id="mainFileName">${escapeHTML(p.videoName||'本編動画を選択')}</strong><small>MP4推奨 · 登録済みなら差し替え可</small></label></div><div class="field"><label>プレビュー用動画</label><label class="upload ${p.previewKey?'has-file':''}" id="uploadPreview"><input type="file" id="previewInput" accept="video/mp4,video/quicktime,video/webm,video/*"/><span class="upload-icon">▸</span><strong id="previewFileName">${escapeHTML(p.previewName||'プレビューを選択')}</strong><small>LINEとXで使用</small></label></div></div><div class="notice">本番ではファイルをCloudflare R2へ分割アップロードします。プレビュー動画からLINE用のサムネイル画像も自動作成します。</div></div>
 <div class="form-section"><h2>04 / 横動画用の追加項目</h2><div class="field"><label for="pHorizontalTitle">横タイトル</label><input id="pHorizontalTitle" value="${escapeHTML(p.horizontalTitle)}" placeholder="横動画用のタイトル"/></div><div class="field"><label for="pHorizontalDescription">横概要欄</label><textarea id="pHorizontalDescription" placeholder="横動画用の説明文">${escapeHTML(p.horizontalDescription)}</textarea></div><div class="notice">横動画のプラットフォーム別投稿ルールは、今後一緒に設定します。現時点では予約と情報保存のみ対応します。</div></div>
 <div class="form-section"><h2>05 / 公開URL・進行状況</h2><div class="field"><label for="pShortsUrl">YouTube Shorts の公開URL</label><input id="pShortsUrl" type="url" value="${escapeHTML(p.shortsUrl)}" placeholder="https://www.youtube.com/shorts/..."/><span class="hint">LINE送信の前に公開URLを確認します。Buffer側の投稿URLを確実に自動取得できない場合は、ここに貼り付けてください。</span></div>${p.id?`<div class="kv"><span>X 手動投稿</span><label><input id="pXPosted" type="checkbox" ${p.xPosted?'checked':''}/> 投稿済み</label></div><div class="kv"><span>Shortsの公開を手動確認</span><label><input id="pShortsConfirmed" type="checkbox" ${p.statuses?.shorts==='sent'?'checked':''}/> 公開確認済み</label></div><div class="kv"><span>LINE送信</span>${labelStatus(p.statuses?.line||'planned')}</div><div class="kv"><span>Shorts投稿</span>${labelStatus(p.statuses?.shorts||'planned')}</div><div class="kv"><span>Instagram投稿</span>${labelStatus(p.statuses?.instagram||'planned')}</div><div class="kv"><span>TikTok投稿</span>${labelStatus(p.statuses?.tiktok||'planned')}</div>`:''}</div>
 <div class="form-actions"><button type="button" class="btn btn-white" data-cancel-editor>戻る</button>${p.id?'<button type="button" class="btn btn-danger" id="deletePost">削除</button>':''}<button type="button" class="btn btn-soft" id="saveDraft">下書き保存</button><button type="submit" class="btn btn-primary" id="saveScheduled">${p.id?'変更を保存':'投稿を予約する'}</button></div></form></section>
 <aside class="stack preview-panel"><section class="panel"><div class="panel-head"><div><h2>投稿プレビュー</h2><p>プラットフォーム別の文面を確認</p></div></div><div class="preview-tabs">${channels.map(c=>`<button class="preview-tab ${editorPreview===c.key?'active':''}" data-preview="${c.key}">${c.short}</button>`).join('')}</div><div class="preview-body"><div id="previewMedia" class="preview-media empty-video">▸</div><div class="preview-meta" id="previewMeta">投稿文章</div><div class="preview-text" id="previewText"></div><div class="actions" style="margin-top:13px"><button class="btn btn-white btn-small" id="copyText">文面をコピー</button><button class="btn btn-white btn-small" id="downloadPreview">プレビュー保存</button></div></div></section><section class="panel" style="padding:20px"><h2 class="card-title">投稿時のルール</h2><div class="kv"><span>通常 YouTube</span><strong>投稿なし</strong></div><div class="kv"><span>Shorts / Reels / TikTok</span><strong>本編</strong></div><div class="kv"><span>X / 公式LINE</span><strong>プレビュー</strong></div><div class="notice" style="margin-top:15px">Xは手動投稿。LINEはShortsの公開URLを確認したあと、人数指定のランダム配信で宣伝します。</div></section></aside></div>`;}
-function editorCurrent(){if(!editor)return {};return {...editor,date:$('#pDate')?.value||editor.date,time:$('#pTime')?.value||editor.time,title:$('#pTitle')?.value||'',roller:$('#pRoller')?.value||'',mini:$('#pMini')?.value||'',horizontalTitle:$('#pHorizontalTitle')?.value||'',horizontalDescription:$('#pHorizontalDescription')?.value||'',shortsUrl:$('#pShortsUrl')?.value||'',collaboratorIds:$('.collabTarget:checked').map(e=>e.value),targets:Object.fromEntries(Object.keys(DEFAULT_TARGETS).map(key=>[key,$('#target_'+key)?.checked??currentTargets(editor)[key]])),thumbnailOffsetMs:Math.round(Number($('#mainFrameOffset')?.value||editor.thumbnailOffsetMs||0)*1000),previewThumbMs:Math.round(Number($('#previewFrameOffset')?.value||editor.previewThumbMs||0)*1000),kind:$('input[name="kind"]:checked')?.value||editor.kind,xPosted:$('#pXPosted')?.checked??editor.xPosted};}
+function editorCurrent(){if(!editor)return {};return {...editor,date:$('#pDate')?.value||editor.date,time:$('#pTime')?.value||editor.time,title:$('#pTitle')?.value||'',roller:$('#pRoller')?.value||'',mini:$('#pMini')?.value||'',horizontalTitle:$('#pHorizontalTitle')?.value||'',horizontalDescription:$('#pHorizontalDescription')?.value||'',shortsUrl:$('#pShortsUrl')?.value||'',targets:Object.fromEntries(Object.keys(DEFAULT_TARGETS).map(key=>[key,$('#target_'+key)?.checked??currentTargets(editor)[key]])),thumbnailOffsetMs:Math.round(Number($('#mainFrameOffset')?.value||editor.thumbnailOffsetMs||0)*1000),previewThumbMs:Math.round(Number($('#previewFrameOffset')?.value||editor.previewThumbMs||0)*1000),kind:$('input[name="kind"]:checked')?.value||editor.kind,xPosted:$('#pXPosted')?.checked??editor.xPosted};}
 async function setPreviewVideo(p){const host=$('#previewMedia');if(!host)return;const key=editorPreview==='line'||editorPreview==='x'?'preview':'video';const file=editorFiles[key];let url=file?URL.createObjectURL(file):await store.mediaUrl(key==='preview'?p.previewKey:p.videoKey);if(previewUrl?.startsWith('blob:'))URL.revokeObjectURL(previewUrl);previewUrl=url;
 if(url){host.classList.remove('empty-video');host.innerHTML='<video controls playsinline muted preload="metadata"></video>';$('video',host).src=url;}else{host.classList.add('empty-video');host.textContent='▸';}}
 async function updatePreview(){if(!editor)return;const p=editorCurrent();const host=$('#previewText');if(!host)return;host.textContent=p.kind==='horizontal'?'横動画セットの投稿ルールは後ほど設定します。':buildText(p,editorPreview);$('#previewMeta').textContent=p.kind==='horizontal'?'横動画の投稿先：未設定':`${channels.find(c=>c.key===editorPreview)?.name} · ${hasTarget(p,editorPreview)?(editorPreview==='x'?'手動投稿':editorPreview==='line'?'自動配信':'Buffer予約'):'このSNSには投稿しません'}`;await setPreviewVideo(p);}
@@ -153,7 +127,7 @@ async function makeThumbnail(file,seconds=0){return new Promise(resolve=>{
 });}
 function downloadFile(blob,name){const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1500);}
 function route(name,id=null){currentView=name;if(name==='editor'){editor=id?structuredClone(posts.find(x=>x.id===id)):newPost();editorFiles={video:null,preview:null,thumbnail:null};editorPreview='shorts';}location.hash=name==='editor'?'#editor':'#'+name;render();}
-function newPost(date=today()){return {kind:'vertical',date,time:'19:00',stage:'draft',title:'',roller:'',mini:'',horizontalTitle:'',horizontalDescription:'',videoKey:'',previewKey:'',thumbnailKey:'',videoName:'',previewName:'',shortsUrl:'',xPosted:false,collaboratorIds:[],collabActions:[],targets:{...DEFAULT_TARGETS},thumbnailOffsetMs:0,previewThumbMs:0,statuses:{shorts:'planned',instagram:'planned',tiktok:'planned',line:'planned'},bufferIds:{}};}
+function newPost(date=today()){return {kind:'vertical',date,time:'19:00',stage:'draft',title:'',roller:'',mini:'',horizontalTitle:'',horizontalDescription:'',videoKey:'',previewKey:'',thumbnailKey:'',videoName:'',previewName:'',shortsUrl:'',xPosted:false,targets:{...DEFAULT_TARGETS},thumbnailOffsetMs:0,previewThumbMs:0,statuses:{shorts:'planned',instagram:'planned',tiktok:'planned',line:'planned'},bufferIds:{}};}
 async function clickHandler(e){const btn=e.target.closest('button');if(!btn)return;if(btn.dataset.view){route(btn.dataset.view);return;}if(btn.hasAttribute('data-new')){route('editor');return;}if(btn.dataset.newDay){route('editor');editor.date=btn.dataset.newDay;render();return;}if(btn.dataset.edit){route('editor',btn.dataset.edit);return;}
 if(btn.dataset.month){const [y,m]=calMonth.split('-').map(Number);const d=btn.dataset.month==='today'?new Date(`${today()}T00:00:00+09:00`):new Date(y,m-1+(btn.dataset.month==='next'?1:-1),1);calMonth=btn.dataset.month==='today'?monthKey():`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;render();return;}
 if(btn.dataset.day){selectedDay=btn.dataset.day;render();return;}
@@ -236,42 +210,15 @@ function bindEditorLibraryControls(){
     const p=editorCurrent();
     const record={id:crypto.randomUUID(),name:name.trim().slice(0,120),title:p.title,roller:p.roller,mini:p.mini,
       horizontalTitle:p.horizontalTitle,horizontalDescription:p.horizontalDescription};
-    const next=structuredClone(library);next.templates.push(record);
-    try{library=await store.saveLibrary(next);
-      const select=$('#postTextPreset');if(select){const opt=document.createElement('option');opt.value=record.id;opt.textContent=record.name;select.append(opt);select.value=record.id;}
+    const next={templates:[...(library.templates||[]),record]};
+    try{
+      library=await store.saveLibrary(next);
+      const select=$('#postTextPreset');
+      if(select){const option=document.createElement('option');option.value=record.id;option.textContent=record.name;select.append(option);select.value=record.id;}
       notify('文章プリセットに保存しました','success');
-    }catch(e){notify('保存に失敗: '+e.message,'error');}
+    }catch(error){notify('保存に失敗: '+error.message,'error');}
   });
-  $('.collabTarget').forEach(check=>check.addEventListener('change',()=>{
-    notify('コラボ相手を変更しました。投稿を保存すると反映されます。');
-  }));
-  $('[data-collab-copy]').forEach(button=>button.addEventListener('click',async()=>{
-    const person=(library.collaborators||[]).find(p=>p.id===button.dataset.collabCopy);
-    if(!person)return notify('登録済みの相手が見つかりません','error');
-    const platform=button.dataset.collabPlatform;
-    const text=platform==='youtube'?person.youtube:platform==='tiktok'?'@'+person.tiktok:'@'+person.instagram;
-    if(!text)return notify('該当SNSのアカウントが未登録です','error');
-    try{await navigator.clipboard.writeText(text);notify(person.name+'さんの'+platform+'情報をコピーしました','success');}
-    catch(e){notify('コピーできませんでした: '+e.message,'error');}
-  }));
-  $('[data-collab-mark]').forEach(button=>button.addEventListener('click',async()=>{
-    if(!editor?.id)return notify('先に投稿を下書き保存してください','error');
-    const personId=button.dataset.collabMark,platform=button.dataset.collabPlatform;
-    const person=library.collaborators.find(p=>p.id===personId);
-    if(!person)return notify('相手の登録がありません','error');
-    const saved=posts.find(p=>p.id===editor.id);
-    if(!saved?.collaboratorIds?.includes(personId))return notify('先にコラボ相手を選んで投稿を保存してください','error');
-    if(!confirm('このボタンは招待を送信しません。'+person.name+'さんについて'+platform+'で手動作業を行った状態を記録しますか？'))return;
-    const arr=(saved.collabActions||[]).filter(a=>!(a.personId===personId&&a.platform===platform));
-    const wasDone=(saved.collabActions||[]).some(a=>a.personId===personId&&a.platform===platform&&a.status==='done_manually');
-    if(!wasDone)arr.push({personId,platform,status:'done_manually',at:new Date().toISOString()});
-    try{const savedPost=await store.savePost({...saved,collabActions:arr});
-      await load();editor=structuredClone(savedPost);render();
-      notify(wasDone?'手動対応済みを解除しました':'手動対応済みを記録しました','success');
-    }catch(e){notify('履歴保存に失敗: '+e.message,'error');}
-  }));
 }
-
 function bindEditor(){if(!$('#postForm'))return;insertPostTargetAndFrameControls();bindEditorLibraryControls();$('#postForm').onsubmit=e=>{e.preventDefault();saveEditor('scheduled');};$$('input[name="kind"]').forEach(x=>x.onchange=()=>{editor=editorCurrent();render();});
 for(const id of ['pDate','pTime','pTitle','pRoller','pMini','pHorizontalTitle','pHorizontalDescription','pShortsUrl','pXPosted']){$('#'+id)?.addEventListener('input',()=>{const p=editorCurrent();$('#previewText').textContent=p.kind==='horizontal'?'横動画セットの投稿ルールは後ほど設定します。':buildText(p,editorPreview);});}
 for(const [id,k,label] of [['videoInput','video','mainFileName'],['previewInput','preview','previewFileName']]){$('#'+id).onchange=e=>{const file=e.target.files?.[0];if(file&&!isVideo(file)){notify('動画ファイルを選択してください','error');e.target.value='';return;}editorFiles[k]=file||null;if(k==='video'){editor.thumbnailOffsetMs=0;const el=$('#mainFrameOffset');if(el)el.value='0';}else{editor.previewThumbMs=0;const el=$('#previewFrameOffset');if(el)el.value='0';}$('#'+label).textContent=file?.name||(k==='video'?'本編動画を選択':'プレビューを選択');if(file)$('#'+(k==='video'?'uploadMain':'uploadPreview')).classList.add('has-file');updatePreview();setupVideoScrubber(k);};}updatePreview();setupVideoScrubber('video');setupVideoScrubber('preview');}
