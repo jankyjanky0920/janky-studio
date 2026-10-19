@@ -21,7 +21,7 @@ let currentView='dashboard',calMonth=today().slice(0,7),selectedDay=today();
 let editor=null,editorFiles={video:null,preview:null,thumbnail:null},editorPreview='shorts',previewUrl='';
 let isSaving=false;
 const libraryManager=createLibraryManager({getLibrary:()=>library,getPosts:()=>posts,saveLibrary:async value=>{library=await store.saveLibrary(value);},notify,onSaved:async()=>{await load();}});
-const bulkManager=createBulkManager({getStore:()=>store,getPosts:()=>posts,notify,onSaved:async()=>{await load();}});
+const bulkManager=createBulkManager({getStore:()=>store,getPosts:()=>posts,getLibrary:()=>library,notify,onSaved:async()=>{await load();}});
 const DEFAULT_TARGETS={shorts:true,instagram:true,tiktok:true,x:true,line:true};
 function currentTargets(p){return {...DEFAULT_TARGETS,...(p?.targets||{})};}
 function hasTarget(p,key){return currentTargets(p)[key]!==false;}
