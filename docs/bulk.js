@@ -26,7 +26,7 @@ function parseHours(text,n){
   return times.sort();
 }
 function validMini(value){return /^#[^\s#]+(?:\s+#[^\s#]+){2}$/.test(value.trim());}
-export function createBulkManager({getStore,getPosts,notify,onSaved}){
+export function createBulkManager({getStore,getPosts,getLibrary,notify,onSaved}){
   let files=[],items=[],busy=false;
   let state={channel:'tiktok',start:nextJst(),end:isoDay(nextJst(),6),daily:3,times:'10:00,15:00,20:00',mini:'#歌い手 #歌ってみた #shorts',roller:''};
   const labels={tiktok:'TikTok',instagram:'Instagram Reels',shorts:'YouTube Shorts'};
@@ -79,6 +79,9 @@ export function createBulkManager({getStore,getPosts,notify,onSaved}){
       +'<div class="field"><label>1日の投稿本数</label><select id="bulkDaily"><option value="2" '+(state.daily===2?'selected':'')+'>2本</option><option value="3" '+(state.daily===3?'selected':'')+'>3本</option></select></div>'
       +'<div class="field"><label>投稿時刻（カンマ区切り）</label><input id="bulkTimes" value="'+htmlEscape(state.times)+'" placeholder="10:00,15:00,20:00"/><span class="hint">この時間帯から順番に割り当て、すでに同じSNSの予約があれば避けます。</span></div></div>'
       +summaryText
+      +'<div class="field"><label>文章プリセット（タグをまとめて反映）</label><select id="bulkPreset"><option value="">選択してください</option>'
+      +(getLibrary()?.templates||[]).map(p=>'<option value="'+htmlEscape(p.id)+'">'+htmlEscape(p.name)+'</option>').join('')
+      +'</select><button type="button" class="btn btn-white" id="bulkApplyPreset" style="margin-top:8px">プリセットのタグを使用</button></div>'
       +'<div class="field"><label>ミニタグ（3個）</label><input id="bulkMini" value="'+htmlEscape(state.mini)+'" placeholder="#歌い手 #歌ってみた #shorts"/></div>'
       +'<div class="field"><label>ローラータグ（Shortsのみ）</label><textarea id="bulkRoller" rows="2" placeholder="#歌い手 #高校生 ...">'+htmlEscape(state.roller)+'</textarea></div></div>'
       +'<div class="form-section"><h2>02 / 過去動画をまとめて選択</h2>'
@@ -97,6 +100,13 @@ export function createBulkManager({getStore,getPosts,notify,onSaved}){
         render(root);
       });
     }
+    const apply=document.getElementById('bulkApplyPreset');
+    if(apply)apply.onclick=()=>{
+      const template=(getLibrary()?.templates||[]).find(t=>t.id===document.getElementById('bulkPreset')?.value);
+      if(!template)return notify('文章プリセットを選んでください','error');
+      state.mini=template.mini||state.mini;state.roller=template.roller||state.roller;
+      render(root);notify('ミニタグ・ローラータグを反映しました。各動画のタイトルはそのままです。','success');
+    };
     const input=document.getElementById('bulkFiles');
     input.onchange=()=>{
       const picked=Array.from(input.files||[]);
