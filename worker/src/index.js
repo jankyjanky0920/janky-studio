@@ -127,6 +127,27 @@ if(method==='GET')return json({post:p});
 if(method==='PUT'){const body=await request.json();if(p.statuses&&Object.entries(p.statuses).some(([k,v])=>['shorts','instagram','tiktok'].includes(k)&&['queued','sent','review'].includes(v))&&(body.title!==p.title||body.date!==p.date||body.time!==p.time||body.videoKey!==p.videoKey||body.stage!==p.stage))return err('Bufferで予約済みの投稿は公開情報を変更できません。先にBuffer予約を確認してください');
 const updated=sanitizePost(body,p);await putPost(env,updated);await log(env,'info',`投稿を更新: ${p.title}`);return json({post:updated});}
 if(method==='DELETE'){if(Object.entries(p.statuses||{}).some(([k,v])=>['shorts','instagram','tiktok'].includes(k)&&['queued','sent','review'].includes(v)))return err('外部予約または送信済み投稿は削除できません');await env.DB.prepare('DELETE FROM posts WHERE id=?').bind(id).run();for(const key of ['videoKey','previewKey','thumbnailKey'])if(p[key])await env.MEDIA.delete(p[key]);await log(env,'info',`投稿削除: ${p.title}`);return json({ok:true});}}
+if(path==='/api/buffer/channels'&&method==='GET'){
+  if(!env.BUFFER_API_KEY)return err('CloudflareのSecretにBUFFER_API_KEYが設定されていません',503);
+  const accountData=await gql(env,'query JankyOrganizations { account { organizations { id name } } }');
+  const organizations=accountData?.account?.organizations;
+  if(!Array.isArray(organizations))throw new Error('Bufferの組織一覧を取得できませんでした');
+  if(organizations.length>20)throw new Error('組織が20件を超えています。管理者に確認してください');
+  const result=[];
+  for(const organization of organizations){
+    const channelData=await gql(env,`query JankyChannels { channels(input: { organizationId: ${JSON.stringify(organization.id)} }) { id name displayName service } }`);
+    if(!Array.isArray(channelData?.channels))throw new Error('Bufferのチャンネル一覧を取得できませんでした: '+String(organization.name));
+    result.push({
+      id: String(organization.id),
+      name: String(organization.name||'名称未設定'),
+      channels:channelData.channels.map(c=>({
+        id:String(c.id), name:String(c.name||''), displayName:String(c.displayName||''),
+        service:String(c.service||'')
+      }))
+    });
+  }
+  return json({organizations:result});
+}
 if(path==='/api/settings'&&method==='GET')return json({settings:await getSettings(env)});
 if(path==='/api/settings'&&method==='PUT'){const body=await request.json();const prev=await getSettings(env);const whitelist=['monthlyQuota','friendCount','manualUsed','spontaneousMonth','autoEnabled','bufferEnabled','lineEnabled','bufferOrganizationId','youtubeChannelId','instagramChannelId','tiktokChannelId','mediaRetentionDays'];
 for(const k of whitelist)if(body[k]!==undefined)prev[k]=body[k];prev.monthlyQuota=safeNum(prev.monthlyQuota,200);prev.manualUsed=safeNum(prev.manualUsed);prev.manualUsedMonth=jstDate().slice(0,7);prev.friendCount=safeNum(prev.friendCount);prev.mediaRetentionDays=Math.min(30,Math.max(1,safeNum(prev.mediaRetentionDays,3)));for(const k of ['autoEnabled','bufferEnabled','lineEnabled'])prev[k]=Boolean(prev[k]);const saved=await setSettings(env,prev);await log(env,'info','設定を更新しました');return json({settings:saved});}
