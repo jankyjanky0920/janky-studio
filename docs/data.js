@@ -98,6 +98,7 @@ export class RemoteStore {
     }catch(e){await this.req('POST','/api/uploads/abort',{key:start.key,uploadId:start.uploadId}).catch(()=>{});throw e;}
   }
   async mediaUrl(key){return key?`${this.base}/media/${key}`:'';}
+  async discoverBuffer(){return this.req('GET','/api/buffer/channels');}
   async getSettings(){return (await this.req('GET','/api/settings')).settings;}
   async saveSettings(value){return (await this.req('PUT','/api/settings',value)).settings;}
   async listLogs(){return (await this.req('GET','/api/logs')).logs;}
