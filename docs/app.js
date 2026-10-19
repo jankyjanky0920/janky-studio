@@ -123,9 +123,63 @@ if(btn.id==='downloadPreview'){const key=editorPreview==='shorts'||editorPreview
 if(btn.hasAttribute('data-refresh')){try{if(store.mode==='live')await store.refresh();await load();render();notify('最新の情報に更新しました','success');}catch(err){notify(err.message,'error')}return;}
 if(btn.id==='exportJson'){const data={version:1,exportedAt:new Date().toISOString(),settings,posts};downloadFile(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),`sns-studio-${today()}.json`);notify('予約データをJSON保存しました（動画データは含みません）');return;}
 if(btn.hasAttribute('data-logout')){sessionStorage.removeItem('snsStudioToken');location.reload();return;}}
-function bindEditor(){if(!$('#postForm'))return;$('#postForm').onsubmit=e=>{e.preventDefault();saveEditor('scheduled');};$$('input[name="kind"]').forEach(x=>x.onchange=()=>{editor=editorCurrent();render();});
+function insertPostTargetAndFrameControls(){
+  const form=$('#postForm');if(!form)return;
+  const section=form.querySelector('.form-section');
+  if(section&&!$('#postTargets')){
+    const wrapper=document.createElement('div');wrapper.id='postTargets';wrapper.style.marginTop='18px';
+    const selected=currentTargets(editor);
+    const opts=[['shorts','YouTube Shorts'],['instagram','Instagram Reels'],['tiktok','TikTok'],['x','X（手動投稿）'],['line','公式LINE']];
+    wrapper.innerHTML='<h3>投稿先を個別指定</h3><div class="form-grid">'+opts.map(pair=>'<label class="field" style="display:flex;gap:9px;align-items:center"><input type="checkbox" id="target_'+pair[0]+'" '+(selected[pair[0]]?'checked':'')+'/> '+pair[1]+'</label>').join('')+'</div><span class="hint">過去動画をTikTokだけに投稿する場合はTikTokのみON。チェックを外したSNSには投稿せず、LINEの無料枠にも含めません。</span>';
+    section.append(wrapper);
+  }
+  const videoSection=form.querySelectorAll('.form-section')[2];
+  if(videoSection&&!$('#mainFrameControl')){
+    const controls=document.createElement('div');
+    controls.innerHTML='<div class="divider" style="margin:18px 0"></div><h3>サムネイルのフレームを選択</h3><p class="small muted">動画のシークバーを動かして好きな秒数を指定できます。Buffer経由ではInstagramとTikTokに適用されます。YouTube ShortsではAPI側の制限により変更されません。</p>'
+    +'<div class="form-grid"><div id="mainFrameControl" class="field"><label>本編動画（Instagram / TikTok）</label><video id="mainSeekVideo" muted playsinline preload="metadata" controls style="width:100%;max-height:240px;background:#0d1624;border-radius:10px"></video><input id="mainFrameOffset" type="range" min="0" max="0" step="0.1" value="'+Number(editor.thumbnailOffsetMs||0)/1000+'" style="width:100%"/><div class="small muted">選択位置：<strong id="mainFrameTime">0.0秒</strong></div><canvas id="mainFrameSnapshot" style="max-width:180px;max-height:160px;border-radius:8px"></canvas></div>'
+    +'<div id="previewFrameControl" class="field"><label>プレビュー動画（LINE）</label><video id="previewSeekVideo" muted playsinline preload="metadata" controls style="width:100%;max-height:240px;background:#0d1624;border-radius:10px"></video><input id="previewFrameOffset" type="range" min="0" max="0" step="0.1" value="'+Number(editor.previewThumbMs||0)/1000+'" style="width:100%"/><div class="small muted">選択位置：<strong id="previewFrameTime">0.0秒</strong></div><canvas id="previewFrameSnapshot" style="max-width:180px;max-height:160px;border-radius:8px"></canvas></div></div>';
+    videoSection.append(controls);
+  }
+}
+async function setupVideoScrubber(which){
+  const main=which==='video';
+  const video=$('#'+(main?'main':'preview')+'SeekVideo');
+  const range=$('#'+(main?'main':'preview')+'FrameOffset');
+  const time=$('#'+(main?'main':'preview')+'FrameTime');
+  const canvas=$('#'+(main?'main':'preview')+'FrameSnapshot');
+  if(!video||!range||!canvas)return;
+  const file=editorFiles[which];const key=main?editor.videoKey:editor.previewKey;
+  if(!file&&!key){video.style.display='none';range.disabled=true;time.textContent='動画を選択すると設定できます';canvas.style.display='none';return;}
+  const url=file?URL.createObjectURL(file):await store.mediaUrl(key);
+  if(!video.isConnected){if(file)URL.revokeObjectURL(url);return;}
+  if(file)thumbnailObjectUrls.push(url);
+  video.crossOrigin='anonymous';
+  video.src=url;video.style.display='block';range.disabled=false;canvas.style.display='block';
+  const show=()=>{
+    const sec=Number(range.value)||0;time.textContent=sec.toFixed(1)+'秒';
+    if(video.readyState>=2&&video.videoWidth){
+      try{const w=Math.min(240,video.videoWidth),h=Math.max(1,Math.round(video.videoHeight*w/video.videoWidth));
+        canvas.width=w;canvas.height=h;canvas.getContext('2d').drawImage(video,0,0,w,h);}catch{/* media loaded but canvas unavailable */}
+    }
+  };
+  range.oninput=()=>{const wanted=Number(range.value)||0;time.textContent=wanted.toFixed(1)+'秒';
+    if(Number.isFinite(video.duration)&&video.duration>0)video.currentTime=Math.min(wanted,Math.max(0,video.duration-.025));
+  };
+  video.onloadedmetadata=()=>{
+    range.max=Math.max(0,video.duration-.05).toFixed(1);
+    const current=Math.min(Number(range.value)||0,Number(range.max)||0);
+    range.value=String(current);
+    time.textContent=current.toFixed(1)+'秒';
+    video.currentTime=current;
+  };
+  video.onseeked=show;video.onloadeddata=show;
+}
+function releaseScrubberObjects(){for(const url of thumbnailObjectUrls)URL.revokeObjectURL(url);thumbnailObjectUrls=[];}
+
+function bindEditor(){if(!$('#postForm'))return;insertPostTargetAndFrameControls();$('#postForm').onsubmit=e=>{e.preventDefault();saveEditor('scheduled');};$$('input[name="kind"]').forEach(x=>x.onchange=()=>{editor=editorCurrent();render();});
 for(const id of ['pDate','pTime','pTitle','pRoller','pMini','pHorizontalTitle','pHorizontalDescription','pShortsUrl','pXPosted']){$('#'+id)?.addEventListener('input',()=>{const p=editorCurrent();$('#previewText').textContent=p.kind==='horizontal'?'横動画セットの投稿ルールは後ほど設定します。':buildText(p,editorPreview);});}
-for(const [id,k,label] of [['videoInput','video','mainFileName'],['previewInput','preview','previewFileName']]){$('#'+id).onchange=e=>{const file=e.target.files?.[0];if(file&&!isVideo(file)){notify('動画ファイルを選択してください','error');e.target.value='';return;}editorFiles[k]=file||null;$('#'+label).textContent=file?.name||(k==='video'?'本編動画を選択':'プレビューを選択');if(file)$('#'+(k==='video'?'uploadMain':'uploadPreview')).classList.add('has-file');updatePreview();};}updatePreview();}
+for(const [id,k,label] of [['videoInput','video','mainFileName'],['previewInput','preview','previewFileName']]){$('#'+id).onchange=e=>{const file=e.target.files?.[0];if(file&&!isVideo(file)){notify('動画ファイルを選択してください','error');e.target.value='';return;}editorFiles[k]=file||null;if(k==='video')editor.thumbnailOffsetMs=0;else editor.previewThumbMs=0;$('#'+label).textContent=file?.name||(k==='video'?'本編動画を選択':'プレビューを選択');if(file)$('#'+(k==='video'?'uploadMain':'uploadPreview')).classList.add('has-file');updatePreview();setupVideoScrubber(k);};}updatePreview();setupVideoScrubber('video');setupVideoScrubber('preview');}
 function bindSettings(){
   const form=$('#settingsForm');if(!form)return;
   const discover=$('#discoverBuffer');
