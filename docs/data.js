@@ -63,6 +63,8 @@ export class LocalStore {
   async deletePost(id) {const p=await this.getPost(id);if(p){for(const key of ['videoKey','previewKey','thumbnailKey']) if(p[key]) await idb.del('assets',p[key]);await idb.del('posts',id);await this.log('info',`投稿「${p.title}」を削除しました`);}}
   async upload(file) {const key=makeId();await idb.put('assets',{id:key,blob:file,name:file.name || key,createdAt:new Date().toISOString()});return key;}
   async mediaUrl(key) {if(!key)return ''; const obj=await idb.get('assets',key);return obj?.blob ? URL.createObjectURL(obj.blob) : '';}
+  async getLibrary(){return (await idb.get('settings','library'))?.value||{collaborators:[],templates:[]};}
+  async saveLibrary(value){await idb.put('settings',{id:'library',value});return value;}
   async getSettings() {const s={...DEFAULT_SETTINGS,...(await idb.get('settings','main'))?.value};if(s.manualUsedMonth&&s.manualUsedMonth!==localDate().slice(0,7))s.manualUsed=0;return s;}
   async saveSettings(value) {await idb.put('settings',{id:'main',value:{...DEFAULT_SETTINGS,...value,manualUsedMonth:localDate().slice(0,7)}});await this.log('info','設定を保存しました');return this.getSettings();}
   async listLogs() {return (await idb.all('logs')).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,100);}
@@ -99,6 +101,8 @@ export class RemoteStore {
   }
   async mediaUrl(key){return key?`${this.base}/media/${key}`:'';}
   async discoverBuffer(){return this.req('GET','/api/buffer/channels');}
+  async getLibrary(){return (await this.req('GET','/api/library')).library;}
+  async saveLibrary(value){return (await this.req('PUT','/api/library',value)).library;}
   async getSettings(){return (await this.req('GET','/api/settings')).settings;}
   async saveSettings(value){return (await this.req('PUT','/api/settings',value)).settings;}
   async listLogs(){return (await this.req('GET','/api/logs')).logs;}
