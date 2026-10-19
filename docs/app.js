@@ -220,7 +220,59 @@ async function setupVideoScrubber(which){
 }
 function releaseScrubberObjects(){for(const url of thumbnailObjectUrls)URL.revokeObjectURL(url);thumbnailObjectUrls=[];}
 
-function bindEditor(){if(!$('#postForm'))return;insertPostTargetAndFrameControls();$('#postForm').onsubmit=e=>{e.preventDefault();saveEditor('scheduled');};$$('input[name="kind"]').forEach(x=>x.onchange=()=>{editor=editorCurrent();render();});
+function bindEditorLibraryControls(){
+  $('#applyTextPreset')?.addEventListener('click',async()=>{
+    const preset=(library.templates||[]).find(p=>p.id===$('#postTextPreset')?.value);
+    if(!preset)return notify('文章プリセットを選んでください','error');
+    if(!confirm('現在のタイトル・タグ・概要欄に「'+preset.name+'」を反映しますか？入力済みの文章が置き換わります。'))return;
+    for(const [field,key] of [['pTitle','title'],['pRoller','roller'],['pMini','mini'],['pHorizontalTitle','horizontalTitle'],['pHorizontalDescription','horizontalDescription']]){
+      const el=$('#'+field);if(el)el.value=preset[key]||'';
+    }
+    await updatePreview();notify('文章プリセットを反映しました。投稿を保存すると内容が確定します。','success');
+  });
+  $('#saveTextPreset')?.addEventListener('click',async()=>{
+    const name=prompt('この文章に付けるプリセット名を入力してください（例：歌ってみた用）');
+    if(!name?.trim())return;
+    const p=editorCurrent();
+    const record={id:crypto.randomUUID(),name:name.trim().slice(0,120),title:p.title,roller:p.roller,mini:p.mini,
+      horizontalTitle:p.horizontalTitle,horizontalDescription:p.horizontalDescription};
+    const next=structuredClone(library);next.templates.push(record);
+    try{library=await store.saveLibrary(next);
+      const select=$('#postTextPreset');if(select){const opt=document.createElement('option');opt.value=record.id;opt.textContent=record.name;select.append(opt);select.value=record.id;}
+      notify('文章プリセットに保存しました','success');
+    }catch(e){notify('保存に失敗: '+e.message,'error');}
+  });
+  $('.collabTarget').forEach(check=>check.addEventListener('change',()=>{
+    notify('コラボ相手を変更しました。投稿を保存すると反映されます。');
+  }));
+  $('[data-collab-copy]').forEach(button=>button.addEventListener('click',async()=>{
+    const person=(library.collaborators||[]).find(p=>p.id===button.dataset.collabCopy);
+    if(!person)return notify('登録済みの相手が見つかりません','error');
+    const platform=button.dataset.collabPlatform;
+    const text=platform==='youtube'?person.youtube:platform==='tiktok'?'@'+person.tiktok:'@'+person.instagram;
+    if(!text)return notify('該当SNSのアカウントが未登録です','error');
+    try{await navigator.clipboard.writeText(text);notify(person.name+'さんの'+platform+'情報をコピーしました','success');}
+    catch(e){notify('コピーできませんでした: '+e.message,'error');}
+  }));
+  $('[data-collab-mark]').forEach(button=>button.addEventListener('click',async()=>{
+    if(!editor?.id)return notify('先に投稿を下書き保存してください','error');
+    const personId=button.dataset.collabMark,platform=button.dataset.collabPlatform;
+    const person=library.collaborators.find(p=>p.id===personId);
+    if(!person)return notify('相手の登録がありません','error');
+    const saved=posts.find(p=>p.id===editor.id);
+    if(!saved?.collaboratorIds?.includes(personId))return notify('先にコラボ相手を選んで投稿を保存してください','error');
+    if(!confirm('このボタンは招待を送信しません。'+person.name+'さんについて'+platform+'で手動作業を行った状態を記録しますか？'))return;
+    const arr=(saved.collabActions||[]).filter(a=>!(a.personId===personId&&a.platform===platform));
+    const wasDone=(saved.collabActions||[]).some(a=>a.personId===personId&&a.platform===platform&&a.status==='done_manually');
+    if(!wasDone)arr.push({personId,platform,status:'done_manually',at:new Date().toISOString()});
+    try{const savedPost=await store.savePost({...saved,collabActions:arr});
+      await load();editor=structuredClone(savedPost);render();
+      notify(wasDone?'手動対応済みを解除しました':'手動対応済みを記録しました','success');
+    }catch(e){notify('履歴保存に失敗: '+e.message,'error');}
+  }));
+}
+
+function bindEditor(){if(!$('#postForm'))return;insertPostTargetAndFrameControls();bindEditorLibraryControls();$('#postForm').onsubmit=e=>{e.preventDefault();saveEditor('scheduled');};$$('input[name="kind"]').forEach(x=>x.onchange=()=>{editor=editorCurrent();render();});
 for(const id of ['pDate','pTime','pTitle','pRoller','pMini','pHorizontalTitle','pHorizontalDescription','pShortsUrl','pXPosted']){$('#'+id)?.addEventListener('input',()=>{const p=editorCurrent();$('#previewText').textContent=p.kind==='horizontal'?'横動画セットの投稿ルールは後ほど設定します。':buildText(p,editorPreview);});}
 for(const [id,k,label] of [['videoInput','video','mainFileName'],['previewInput','preview','previewFileName']]){$('#'+id).onchange=e=>{const file=e.target.files?.[0];if(file&&!isVideo(file)){notify('動画ファイルを選択してください','error');e.target.value='';return;}editorFiles[k]=file||null;if(k==='video'){editor.thumbnailOffsetMs=0;const el=$('#mainFrameOffset');if(el)el.value='0';}else{editor.previewThumbMs=0;const el=$('#previewFrameOffset');if(el)el.value='0';}$('#'+label).textContent=file?.name||(k==='video'?'本編動画を選択':'プレビューを選択');if(file)$('#'+(k==='video'?'uploadMain':'uploadPreview')).classList.add('has-file');updatePreview();setupVideoScrubber(k);};}updatePreview();setupVideoScrubber('video');setupVideoScrubber('preview');}
 function bindSettings(){
