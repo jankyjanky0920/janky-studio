@@ -33,7 +33,33 @@ test('3個でないミニタグは拒否',()=>{
   assert.throws(()=>sanitizePost(p,null),/3個/);
   assert.doesNotThrow(()=>sanitizePost({...p,mini:'#a #b #c'},null));
 });
-test('予約した縦動画に本編とプレビューが必要',()=>{
+test('投稿先によって本編とプレビューの必要条件が変わる',()=>{
   const p={kind:'vertical',stage:'scheduled',date:day,time:'19:00',title:'テスト',mini:'#a #b #c'};
-  assert.throws(()=>sanitizePost(p,null),/本編とプレビュー/);
+  assert.throws(()=>sanitizePost(p,null),/本編動画/);
+  const videoKey='uploads/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.mp4';
+  assert.throws(()=>sanitizePost({...p,videoKey},null),/プレビュー動画/);
+});
+test('TikTokだけの一括予約はShorts・Instagram・LINE・Xを選択しない',()=>{
+  const p=sanitizePost({
+    kind:'vertical',stage:'scheduled',date:day,time:'10:00',title:'過去動画',mini:'#a #b #c',
+    videoKey:'uploads/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.mp4',
+    targets:{shorts:false,instagram:false,tiktok:true,x:false,line:false},thumbnailOffsetMs:2530
+  },null);
+  assert.equal(p.targets.tiktok,true);
+  assert.equal(p.statuses.tiktok,'planned');
+  for(const k of ['shorts','instagram','line'])assert.equal(p.statuses[k],'skipped');
+  assert.equal(p.thumbnailOffsetMs,2530);
+  assert.equal(p.previewKey,'');
+  const web=countBudget([p],DEFAULT_SETTINGS,0,day);
+  const backend=budget([p],DEFAULT_SETTINGS,0,day);
+  assert.equal(web.D,0);assert.equal(backend.D,0);
+});
+test('予約済みのBuffer投稿は、投稿先を後から外せない',()=>{
+  const p=sanitizePost({
+    kind:'vertical',stage:'scheduled',date:day,time:'10:00',title:'動画',mini:'#a #b #c',
+    videoKey:'uploads/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.mp4',
+    targets:{shorts:false,instagram:false,tiktok:true,x:false,line:false}
+  },null);
+  p.statuses.tiktok='queued';
+  assert.throws(()=>sanitizePost({targets:{tiktok:false}},p),/投稿先を変更/);
 });
