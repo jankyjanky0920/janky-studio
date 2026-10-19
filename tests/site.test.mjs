@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {countBudget, DEFAULT_SETTINGS} from '../docs/data.js';
-import {budget,postText,sanitizePost} from '../worker/src/index.js';
+import {budget,postText,sanitizePost,sanitizeLibrary} from '../worker/src/index.js';
+import {planBulkRange} from '../docs/bulk.js';
 const day='2026-10-17';
 const make=(kind,date,id)=>({id,kind,date,time:'19:00',stage:'scheduled',statuses:{line:'planned'}});
 test('縦動画の残枠を横動画と月1回の全員通知を確保してから計算',()=>{
@@ -62,4 +63,33 @@ test('予約済みのBuffer投稿は、投稿先を後から外せない',()=>{
   },null);
   p.statuses.tiktok='queued';
   assert.throws(()=>sanitizePost({targets:{tiktok:false}},p),/投稿先を変更/);
+});
+
+test('一括予約の開始日・終了日は両端を含み合計本数を計算する',()=>{
+  const range=planBulkRange({start:'2026-11-01',end:'2026-11-07',daily:3,times:'10:00,15:00,20:00',now:Date.parse('2026-10-19T00:00:00+09:00')});
+  assert.equal(range.days,7);assert.equal(range.total,21);assert.equal(range.available,21);
+  assert.equal(range.slots[0].date,'2026-11-01');assert.equal(range.slots.at(-1).date,'2026-11-07');
+});
+test('既存枠を除外し終了日を越えて追加しない',()=>{
+  const range=planBulkRange({start:'2026-11-01',end:'2026-11-02',daily:2,times:'12:00,19:00',now:Date.parse('2026-10-19T00:00:00+09:00'),existing:[{date:'2026-11-01',time:'12:00'}]});
+  assert.equal(range.total,4);assert.equal(range.booked,1);assert.equal(range.available,3);
+  assert.equal(range.slots.every(x=>x.date<='2026-11-02'),true);
+  assert.throws(()=>planBulkRange({start:'2026-11-03',end:'2026-11-01',daily:2,times:'12:00,19:00'}),/終了日/);
+});
+test('コラボ相手のYouTube・TikTok・Instagramを同じプリセットとして保存可能',()=>{
+  const lib=sanitizeLibrary({collaborators:[{
+    id:'creator_A',name:'Aさん',youtube:'https://www.youtube.com/@creatorA',tiktok:'@creator_a',instagram:'@creator.a',notes:'以前の共同制作'
+  }],templates:[{id:'copy_01',name:'歌ってみた',title:'動画の題名',mini:'#歌い手 #高校生 #shorts',roller:'#歌い手 #高校生'}]});
+  assert.equal(lib.collaborators.length,1);
+  assert.equal(lib.collaborators[0].tiktok,'creator_a');
+  assert.equal(lib.collaborators[0].instagram,'creator.a');
+  assert.equal(lib.templates[0].roller,'#歌い手 #高校生');
+});
+test('コラボ招待は自動送信と扱わず手動対応の履歴のみを保存する',()=>{
+  const p=sanitizePost({kind:'vertical',stage:'draft',date:'2026-11-01',time:'19:00',title:'コラボテスト',
+    collaboratorIds:['creator_A'],collabActions:[{personId:'creator_A',platform:'youtube',status:'done_manually',at:'2026-10-19T00:00:00Z'}]
+  },null);
+  assert.deepEqual(p.collaboratorIds,['creator_A']);
+  assert.equal(p.collabActions[0].status,'done_manually');
+  assert.equal(p.collabActions.length,1);
 });
