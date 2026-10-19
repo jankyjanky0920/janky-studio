@@ -31,22 +31,50 @@ async function getMonthlyUsage(env,s){let apiUsed=0,source='manual';if(env.LINE_
 const month=jstDate().slice(0,7);const rec=await env.DB.prepare("SELECT COALESCE(SUM(target_count),0) AS total FROM line_records WHERE month=? AND state IN ('accepted','pending','sent')").bind(month).first();
 // LINE API usage is approximate and may lag. The local ledger is a second lower bound.
 const used=Math.max(apiUsed,safeNum(s.manualUsed),safeNum(rec?.total));return {used,source,timestamp:nowIso(),friendCount:s.friendCount,apiUsed,localLedger:safeNum(rec?.total)};}
+function targetEnabled(p,key){return p.targets?.[key]!==false;}
 function budget(posts,settings,used,day=jstDate()){const month=day.slice(0,7);const remainingPosts=posts.filter(p=>p.stage==='scheduled'&&p.date?.startsWith(month));
-const vertical=remainingPosts.filter(p=>p.kind==='vertical'&&!['sent','skipped'].includes(p.statuses?.line));const horizontal=remainingPosts.filter(p=>p.kind==='horizontal'&&!['sent','skipped'].includes(p.statuses?.line));const M=safeNum(settings.monthlyQuota,200),U=safeNum(used),F=safeNum(settings.friendCount),H=horizontal.length*F,S=settings.spontaneousMonth===month?0:F,R=Math.max(0,M-U-H-S),D=vertical.length;
+const vertical=remainingPosts.filter(p=>p.kind==='vertical'&&targetEnabled(p,'line')&&!['sent','skipped'].includes(p.statuses?.line));const horizontal=remainingPosts.filter(p=>p.kind==='horizontal'&&!['sent','skipped'].includes(p.statuses?.line));const M=safeNum(settings.monthlyQuota,200),U=safeNum(used),F=safeNum(settings.friendCount),H=horizontal.length*F,S=settings.spontaneousMonth===month?0:F,R=Math.max(0,M-U-H-S),D=vertical.length;
 return {M,U,F,H,S,R,D,next:D?Math.min(F,Math.floor(R/D)):0,remaining:Math.max(0,M-U)};}
-function sanitizePost(body,old){const p={...old,...body};p.id=old?.id||crypto.randomUUID();p.createdAt=old?.createdAt||nowIso();p.kind=p.kind==='horizontal'?'horizontal':'vertical';p.stage=p.stage==='scheduled'?'scheduled':'draft';for(const f of ['title','roller','mini','horizontalTitle','horizontalDescription','shortsUrl','videoKey','previewKey','thumbnailKey','videoName','previewName'])p[f]=String(p[f]||'').slice(0,f==='roller'||f==='horizontalDescription'?8000:650);
-if(!/^\d{4}-\d{2}-\d{2}$/.test(p.date)||!/^\d{2}:\d{2}$/.test(p.time))throw new Error('投稿日時を正しく指定してください');
-if(!p.title.trim())throw new Error('タイトルを入力してください');if(p.stage==='scheduled'&&p.kind==='vertical'&&p.title.length>100)throw new Error('YouTube Shortsのタイトルは100文字以内です');if(p.stage==='scheduled'&&p.kind==='vertical'&&!p.mini.trim())throw new Error('ミニタグは3個入力してください');
-if(p.kind==='vertical'&&p.mini.trim()&&(!/^#[^\s#]+(?:\s+#[^\s#]+){2}$/.test(p.mini.trim())))throw new Error('ミニタグは3個のハッシュタグで入力してください');
-if(p.stage==='scheduled'&&p.kind==='vertical'&&(!p.videoKey||!p.previewKey))throw new Error('本編とプレビューを登録してください');
-for(const f of ['videoKey','previewKey','thumbnailKey'])if(p[f]&&!safePath(p[f]))throw new Error(`${f} が不正です`);
-if(p.shortsUrl&&(!/^https:\/\/(www\.|m\.)?youtube\.com\/shorts\/[A-Za-z0-9_-]{6,}/.test(p.shortsUrl)&&!/^https:\/\/youtu\.be\/[A-Za-z0-9_-]{6,}/.test(p.shortsUrl)))throw new Error('Shorts URLを確認してください');
-p.statuses={shorts:'planned',instagram:'planned',tiktok:'planned',line:'planned',...(old?.statuses||{})};p.bufferIds={...(old?.bufferIds||{})};p.xPosted=Boolean(p.xPosted);return p;}
+function sanitizePost(body,old){
+  const p={...old,...body};
+  p.id=old?.id||crypto.randomUUID();p.createdAt=old?.createdAt||nowIso();
+  p.kind=p.kind==='horizontal'?'horizontal':'vertical';p.stage=p.stage==='scheduled'?'scheduled':'draft';
+  for(const f of ['title','roller','mini','horizontalTitle','horizontalDescription','shortsUrl','videoKey','previewKey','thumbnailKey','videoName','previewName'])p[f]=String(p[f]||'').slice(0,f==='roller'||f==='horizontalDescription'?8000:650);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(p.date)||!/^\d{2}:\d{2}$/.test(p.time))throw new Error('投稿日時を正しく指定してください');
+  if(!p.title.trim())throw new Error('タイトルを入力してください');
+  const defaults={shorts:true,instagram:true,tiktok:true,line:true,x:true};
+  p.targets={...defaults,...(old?.targets||{}),...(body.targets||{})};
+  for(const key of Object.keys(defaults))p.targets[key]=Boolean(p.targets[key]);
+  if(old?.statuses)for(const key of ['shorts','instagram','tiktok','line']){
+    if(old.statuses[key]&&['queued','review','sent','pending'].includes(old.statuses[key]) && p.targets[key]!==targetEnabled(old,key))
+      throw new Error(key+' の処理開始後は投稿先を変更できません');
+  }
+  p.thumbnailOffsetMs=Math.max(0,Math.min(86400000,Math.round(Number(p.thumbnailOffsetMs)||0)));
+  p.previewThumbMs=Math.max(0,Math.min(86400000,Math.round(Number(p.previewThumbMs)||0)));
+  if(p.kind==='vertical'){
+    if(p.stage==='scheduled'&&!Object.values(p.targets).some(Boolean))throw new Error('投稿先を1つ以上選択してください');
+    if(p.stage==='scheduled'&&p.targets.shorts&&p.title.length>100)throw new Error('YouTube Shortsのタイトルは100文字以内です');
+    if(p.stage==='scheduled'&&(p.targets.tiktok||p.targets.instagram||p.targets.x)&&!p.mini.trim())throw new Error('ミニタグを3個入力してください');
+    if(p.mini.trim()&&(!/^#[^\s#]+(?:\s+#[^\s#]+){2}$/.test(p.mini.trim())))throw new Error('ミニタグは3個のハッシュタグで入力してください');
+    if(p.stage==='scheduled'&&(p.targets.shorts||p.targets.tiktok||p.targets.instagram)&&!p.videoKey)throw new Error('本編動画を登録してください');
+    if(p.stage==='scheduled'&&(p.targets.line||p.targets.x)&&!p.previewKey)throw new Error('LINE・Xを選んだ場合はプレビュー動画が必要です');
+  }
+  for(const f of ['videoKey','previewKey','thumbnailKey'])if(p[f]&&!safePath(p[f]))throw new Error(`${f} が不正です`);
+  if(p.shortsUrl&&(!/^https:\/\/(www\.|m\.)?youtube\.com\/shorts\/[A-Za-z0-9_-]{6,}/.test(p.shortsUrl)&&!/^https:\/\/youtu\.be\/[A-Za-z0-9_-]{6,}/.test(p.shortsUrl)))throw new Error('Shorts URLを確認してください');
+  p.statuses={shorts:'planned',instagram:'planned',tiktok:'planned',line:'planned',...(old?.statuses||{}),...(body.statuses||{})};
+  for(const key of ['shorts','instagram','tiktok','line']){
+    if(!p.targets[key])p.statuses[key]='skipped';
+    else if(p.statuses[key]==='skipped')p.statuses[key]='planned';
+  }
+  p.bufferIds={...(old?.bufferIds||{}),...(body.bufferIds||{})};
+  p.xPosted=Boolean(p.xPosted);
+  return p;
+}
 function postText(p,kind){if(kind==='shorts')return `${p.title}\n\n${p.roller}`;if(['instagram','tiktok'].includes(kind))return `${p.title} ${p.mini}`;if(kind==='line')return `じゃんきー。がshortsを更新しました！\n\n${p.title}\n${p.shortsUrl}`;if(kind==='x')return `じゃんきー。がshortsを更新しました！\n\n${p.title}\n${p.shortsUrl}\n\n${p.mini}`;return '';}
 function mediaUrl(env,key){return `${env.MEDIA_ORIGIN.replace(/\/$/,'')}/media/${key}`;}
 async function gql(env,query){if(!env.BUFFER_API_KEY)throw new Error('BUFFER_API_KEY が未設定です');const r=await fetch('https://api.buffer.com',{method:'POST',headers:{'Authorization':`Bearer ${env.BUFFER_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({query})});const data=await r.json();if(!r.ok||data.errors?.length)throw new Error(`Buffer API: ${JSON.stringify(data.errors||data).slice(0,300)}`);return data.data;}
 async function bufferPosts(env,org,channel,status){const data=await gql(env,`query { posts(first:100,input:{organizationId:${JSON.stringify(org)},filter:{status:[${status}],channelIds:[${JSON.stringify(channel)}]}}){edges{node{id channelId createdAt}}pageInfo{hasNextPage}} }`);return data?.posts?.edges?.map(e=>e.node)||[];}
-async function enqueueBuffer(env,p,key,channel){const dueAt=new Date(`${p.date}T${p.time}:00+09:00`).toISOString();const bodyText=key==='shorts'?p.roller:postText(p,key);const extra=key==='shorts'?`, metadata:{youtube:{title:${JSON.stringify(p.title)},categoryId:"24"}}`:key==='instagram'?`, metadata:{instagram:{type:reel,shouldShareToFeed:true}}`:'';const query=`mutation { createPost(input:{ text:${JSON.stringify(bodyText)}, channelId:${JSON.stringify(channel)}, schedulingType:automatic, mode:customScheduled, dueAt:${JSON.stringify(dueAt)}, assets:[{video:{url:${JSON.stringify(mediaUrl(env,p.videoKey))}}}]${extra} }){... on PostActionSuccess{post{id dueAt}} ... on MutationError{message}} }`;
+async function enqueueBuffer(env,p,key,channel){const dueAt=new Date(`${p.date}T${p.time}:00+09:00`).toISOString();const bodyText=key==='shorts'?p.roller:postText(p,key);const thumbMeta=(key==='instagram'||key==='tiktok')&&p.thumbnailOffsetMs>0?`,metadata:{thumbnailOffset:${p.thumbnailOffsetMs}}`:'';const extra=key==='shorts'?`, metadata:{youtube:{title:${JSON.stringify(p.title)},categoryId:"24"}}`:key==='instagram'?`, metadata:{instagram:{type:reel,shouldShareToFeed:true}}`:'';const query=`mutation { createPost(input:{ text:${JSON.stringify(bodyText)}, channelId:${JSON.stringify(channel)}, schedulingType:automatic, mode:customScheduled, dueAt:${JSON.stringify(dueAt)}, assets:[{video:{url:${JSON.stringify(mediaUrl(env,p.videoKey))}}${thumbMeta}}]${extra} }){... on PostActionSuccess{post{id dueAt}} ... on MutationError{message}} }`;
 const data=await gql(env,query);const out=data.createPost;if(out?.message)throw new Error(out.message);if(!out?.post?.id)throw new Error('Bufferから投稿IDが返されませんでした');return out.post.id;}
 async function syncBuffer(env,s,posts){if(!s.autoEnabled||!s.bufferEnabled||!env.BUFFER_API_KEY||!s.bufferOrganizationId)return;
 for(const [key,channel] of [['shorts',s.youtubeChannelId],['instagram',s.instagramChannelId],['tiktok',s.tiktokChannelId]]){
@@ -54,7 +82,7 @@ if(!channel)continue;try{
  const scheduled=await bufferPosts(env,s.bufferOrganizationId,channel,'scheduled');const sent=await bufferPosts(env,s.bufferOrganizationId,channel,'sent');const sentIds=new Set(sent.map(x=>x.id));const failed=await bufferPosts(env,s.bufferOrganizationId,channel,'error').catch(()=>[]);const failedIds=new Set(failed.map(x=>x.id));
  for(const p of posts){if(p.kind!=='vertical'||!p.bufferIds?.[key])continue;if(failedIds.has(p.bufferIds[key])&&p.statuses?.[key]!=='error'){p.statuses[key]='error';await putPost(env,p);await log(env,'error',`${key} Buffer投稿失敗: ${p.title}`);}if(sentIds.has(p.bufferIds[key])&&p.statuses?.[key]!=='sent'){p.statuses[key]='sent';await putPost(env,p);await log(env,'success',`${key} 投稿確認: ${p.title}`);}}
  let capacity=Math.max(0,10-scheduled.length);
- const eligible=posts.filter(p=>p.stage==='scheduled'&&p.kind==='vertical'&&p.videoKey&&p.statuses?.[key]==='planned'&&new Date(`${p.date}T${p.time}:00+09:00`).getTime()>Date.now()+4*60*1000).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+ const eligible=posts.filter(p=>p.stage==='scheduled'&&p.kind==='vertical'&&targetEnabled(p,key)&&p.videoKey&&p.statuses?.[key]==='planned'&&new Date(`${p.date}T${p.time}:00+09:00`).getTime()>Date.now()+4*60*1000).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
  for(const p of eligible.slice(0,capacity)){
    // Claim the post before contacting Buffer to avoid duplicate posts if the request times out.
    p.statuses[key]='review';await putPost(env,p);
@@ -65,7 +93,7 @@ if(!channel)continue;try{
 }
 async function lineRecord(env,{postId=null,kind,target,state,requestId=null}){const id=crypto.randomUUID(),t=nowIso();await env.DB.prepare('INSERT INTO line_records (id,post_id,kind,month,target_count,state,request_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)').bind(id,postId,kind,jstDate().slice(0,7),target,state,requestId,t,t).run();return id;}
 async function beginLineSend(env,p,s,posts,{force=false}={}){
-if(!s.lineEnabled)throw new Error('LINE配信が無効です');if(p.kind!=='vertical')throw new Error('横動画の配信ルールは未設定です');if(['sent','pending','review'].includes(p.statuses?.line))throw new Error('LINEの送信が受付済みか結果確認待ちです。LINE管理画面を確認してから復旧してください');
+if(!s.lineEnabled)throw new Error('LINE配信が無効です');if(!targetEnabled(p,'line'))throw new Error('この投稿はLINEの配信対象外です');if(p.kind!=='vertical')throw new Error('横動画の配信ルールは未設定です');if(['sent','pending','review'].includes(p.statuses?.line))throw new Error('LINEの送信が受付済みか結果確認待ちです。LINE管理画面を確認してから復旧してください');
 if(!p.shortsUrl)throw new Error('Shorts URLが未設定です');if(!p.previewKey||!p.thumbnailKey)throw new Error('LINE送信用プレビュー・サムネイルが不足しています');
 if(!force&&p.statuses?.shorts!=='sent')throw new Error('Shortsの公開確認ができていません');
 const usage=await getMonthlyUsage(env,s);const b=budget(posts,s,usage.used);const target=Math.min(b.F,b.next,b.remaining);if(target<1)throw new Error('LINEの配信可能人数が0人です');
@@ -86,7 +114,7 @@ s.friendCount=Math.max(0,data.followers-data.blocks);s.followersCheckedDate=date
 }}catch(e){await log(env,'error',`友だち数の取得失敗: ${e.message}`);}}
 async function cleanup(env,s,posts){const cutoff=Date.now()-Math.max(1,safeNum(s.mediaRetentionDays,3))*86400000;
 for(const p of posts){if(!p.videoKey&&!p.previewKey&&!p.thumbnailKey)continue;if(p.stage!=='scheduled'||p.kind!=='vertical')continue;
-const allSent=['shorts','instagram','tiktok','line'].every(k=>p.statuses?.[k]==='sent')&&p.xPosted;
+const allSent=['shorts','instagram','tiktok','line'].every(k=>!targetEnabled(p,k)||p.statuses?.[k]==='sent')&&(!targetEnabled(p,'x')||p.xPosted);
 if(!allSent)continue;const doneAt=p.completedAt||nowIso();if(!p.completedAt){p.completedAt=doneAt;await putPost(env,p);continue;}if(new Date(doneAt).getTime()>cutoff)continue;
 for(const key of ['videoKey','previewKey','thumbnailKey'])if(p[key]){await env.MEDIA.delete(p[key]);p[key]='';}p.filesDeletedAt=nowIso();await putPost(env,p);await log(env,'success',`完了後${s.mediaRetentionDays}日を経過した動画を削除: ${p.title}`);}}
 // Buffer Free API has a rolling 30-day limit (3,000 calls). Avoid querying
@@ -104,7 +132,7 @@ function shouldSyncBuffer(posts, now=new Date()) {
   return regular || (nearRelease && minute%30<5);
 }
 async function cron(env){const s=await getSettings(env);if(!s.autoEnabled)return {skipped:true,reason:'自動処理はオフ'};const posts=await getPosts(env);await syncFollowers(env,s);if(shouldSyncBuffer(posts))await syncBuffer(env,s,posts);await syncLineProgress(env,posts);
-if(s.lineEnabled&&env.LINE_CHANNEL_ACCESS_TOKEN){for(const p of posts){if(p.kind!=='vertical'||p.stage!=='scheduled'||p.statuses?.line!=='planned')continue;if(new Date(`${p.date}T${p.time}:00+09:00`).getTime()>Date.now())continue;if(!p.shortsUrl||p.statuses.shorts!=='sent'){if(!p.lastWaitingNotice || Date.now()-new Date(p.lastWaitingNotice).getTime()>86400000){p.lastWaitingNotice=nowIso();await putPost(env,p);await log(env,'error',`LINE配信を保留: Shorts公開URLまたは公開確認がありません「${p.title}」`);}continue;}try{await beginLineSend(env,p,s,posts);}catch{} }}await cleanup(env,s,posts);return {ok:true};}
+if(s.lineEnabled&&env.LINE_CHANNEL_ACCESS_TOKEN){for(const p of posts){if(p.kind!=='vertical'||p.stage!=='scheduled'||!targetEnabled(p,'line')||p.statuses?.line!=='planned')continue;if(new Date(`${p.date}T${p.time}:00+09:00`).getTime()>Date.now())continue;if(!p.shortsUrl||p.statuses.shorts!=='sent'){if(!p.lastWaitingNotice || Date.now()-new Date(p.lastWaitingNotice).getTime()>86400000){p.lastWaitingNotice=nowIso();await putPost(env,p);await log(env,'error',`LINE配信を保留: Shorts公開URLまたは公開確認がありません「${p.title}」`);}continue;}try{await beginLineSend(env,p,s,posts);}catch{} }}await cleanup(env,s,posts);return {ok:true};}
 function mimeFromFile(file){const ext=file.name?.split('.').pop()?.toLowerCase();if(file.type==='image/jpeg'||ext==='jpg'||ext==='jpeg')return 'image/jpeg';if(file.type==='image/png'||ext==='png')return 'image/png';if(file.type==='video/mp4'||ext==='mp4')return 'video/mp4';if(file.type==='video/quicktime'||ext==='mov')return 'video/quicktime';if(file.type==='video/webm'||ext==='webm')return 'video/webm';throw new Error('サポートされていないファイル形式です');}
 async function uploadStart(env,body){const mime=mimeFromFile({name:body.filename,type:body.type});const ext={ 'image/jpeg':'jpg','image/png':'png','video/mp4':'mp4','video/quicktime':'mov','video/webm':'webm'}[mime];const size=safeNum(body.size);if(size<1||size>3*1024*1024*1024)throw new Error('1ファイル最大3GBです（R2無料枠とは別）');const key=`uploads/${crypto.randomUUID()}.${ext}`;
 const upload=await env.MEDIA.createMultipartUpload(key,{httpMetadata:{contentType:mime,cacheControl:'public,max-age=86400'}});return {key,uploadId:upload.uploadId};}
