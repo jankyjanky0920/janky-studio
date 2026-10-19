@@ -27,43 +27,37 @@ else await env.DB.prepare('INSERT INTO posts (id,payload,created_at,updated_at) 
 async function getSettings(env){const row=await env.DB.prepare("SELECT value FROM settings WHERE id='main'").first();const s={...DEFAULTS,...(row?JSON.parse(row.value):{})};if(s.manualUsedMonth&&s.manualUsedMonth!==jstDate().slice(0,7))s.manualUsed=0;return s;}
 async function setSettings(env,s){const v={...DEFAULTS,...s};await env.DB.prepare("INSERT INTO settings(id,value) VALUES('main',?) ON CONFLICT(id) DO UPDATE SET value=excluded.value").bind(JSON.stringify(v)).run();return v;}
 function sanitizeLibrary(body){
-  if(!body||typeof body!=='object')throw new Error('保存するライブラリが不正です');
+  if(!body||typeof body!=='object')throw new Error('文章プリセットのデータが不正です');
+  const textItems=Array.isArray(body.templates)?body.templates:[];
+  if(textItems.length>150)throw new Error('文章プリセットは150件までです');
   const clean=str=>String(str??'').trim();
-  const collabs=Array.isArray(body.collaborators)?body.collaborators:[];
-  const texts=Array.isArray(body.templates)?body.templates:[];
-  if(collabs.length>150||texts.length>150)throw new Error('プリセットは各150件までです');
-  const collaborators=collabs.map(c=>({
-    id:clean(c.id).slice(0,100),name:clean(c.name).slice(0,120),
-    youtube:clean(c.youtube).slice(0,500),tiktok:clean(c.tiktok).replace(/^@/,'').slice(0,60),
-    instagram:clean(c.instagram).replace(/^@/,'').slice(0,60),notes:clean(c.notes).slice(0,1000)
+  const templates=textItems.map(t=>({
+    id:clean(t.id).slice(0,100),name:clean(t.name).slice(0,120),
+    title:clean(t.title).slice(0,200),roller:clean(t.roller).slice(0,8000),
+    mini:clean(t.mini).slice(0,500),horizontalTitle:clean(t.horizontalTitle).slice(0,200),
+    horizontalDescription:clean(t.horizontalDescription).slice(0,8000)
   }));
-  const templates=texts.map(c=>({
-    id:clean(c.id).slice(0,100),name:clean(c.name).slice(0,120),title:clean(c.title).slice(0,200),
-    roller:clean(c.roller).slice(0,8000),mini:clean(c.mini).slice(0,500),
-    horizontalTitle:clean(c.horizontalTitle).slice(0,200),horizontalDescription:clean(c.horizontalDescription).slice(0,8000)
-  }));
-  for(const item of collaborators){
-    if(!/^[a-zA-Z0-9_-]{4,100}$/.test(item.id)||!item.name)throw new Error('コラボ相手のID・名前が不正です');
-    if(item.youtube && !/^https:\/\/(www\.)?youtube\.com\/(channel\/UC[A-Za-z0-9_-]+|@[A-Za-z0-9_.-]+)(\/.*)?$/.test(item.youtube))
-      throw new Error('YouTubeチャンネルのURLを確認してください');
-    if(item.tiktok&&!/^[a-zA-Z0-9._]{2,32}$/.test(item.tiktok))throw new Error('TikTokのユーザー名を確認してください');
-    if(item.instagram&&!/^[a-zA-Z0-9._]{2,30}$/.test(item.instagram))throw new Error('Instagramのユーザー名を確認してください');
+  for(const item of templates){
+    if(!/^[a-zA-Z0-9_-]{4,100}$/.test(item.id)||!item.name)throw new Error('文章プリセット名が不正です');
+    if(item.mini && !/^#[^\s#]+(?:\s+#[^\s#]+){2}$/.test(item.mini))throw new Error('ミニタグは3個指定してください');
   }
-  for(const item of templates)if(!/^[a-zA-Z0-9_-]{4,100}$/.test(item.id)||!item.name)throw new Error('文章プリセット名が不正です');
-  const ids=[...collaborators,...templates].map(c=>c.id);
-  if(ids.length!==new Set(ids).size)throw new Error('プリセットIDが重複しています');
-  const result={collaborators,templates};
-  if(JSON.stringify(result).length>250000)throw new Error('保存データが大きすぎます');
-  return result;
+  if(templates.length!==new Set(templates.map(t=>t.id)).size)throw new Error('文章プリセットIDが重複しています');
+  if(JSON.stringify(templates).length>250000)throw new Error('文章プリセットの保存データが大きすぎます');
+  return {templates};
 }
 async function getLibrary(env){
   const row=await env.DB.prepare("SELECT value FROM settings WHERE id='library'").first();
-  return row?sanitizeLibrary(JSON.parse(row.value)):{collaborators:[],templates:[]};
+  return row?sanitizeLibrary(JSON.parse(row.value)):{templates:[]};
 }
 async function saveLibrary(env,input){
   const value=sanitizeLibrary(input);
+  // Preserve any older collaborator records in D1 without exposing them in the UI.
+  // Removing the unused feature must not silently destroy existing user data.
+  const row=await env.DB.prepare("SELECT value FROM settings WHERE id='library'").first();
+  const existing=row?JSON.parse(row.value):{};
+  const retained={...existing,templates:value.templates};
   await env.DB.prepare("INSERT INTO settings(id,value) VALUES('library',?) ON CONFLICT(id) DO UPDATE SET value=excluded.value")
-    .bind(JSON.stringify(value)).run();
+    .bind(JSON.stringify(retained)).run();
   return value;
 }
 async function lineFetch(env,path,options={}){if(!env.LINE_CHANNEL_ACCESS_TOKEN)throw new Error('LINE_CHANNEL_ACCESS_TOKEN が未設定です');const r=await fetch(`https://api.line.me${path}`,{...options,headers:{Authorization:`Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}`,...options.headers}});if(!r.ok){let error=await r.text();throw new Error(`LINE API ${r.status}: ${error.slice(0,350)}`);}return r;}
@@ -107,10 +101,6 @@ function sanitizePost(body,old){
     else if(p.statuses[key]==='skipped')p.statuses[key]='planned';
   }
   p.bufferIds={...(old?.bufferIds||{}),...(body.bufferIds||{})};
-  p.collaboratorIds=Array.isArray(p.collaboratorIds)?[...new Set(p.collaboratorIds.map(x=>String(x).slice(0,100)))].slice(0,10):[];
-  const actions=Array.isArray(p.collabActions)?p.collabActions:[];
-  p.collabActions=actions.filter(a=>a&&typeof a==='object'&&p.collaboratorIds.includes(a.personId)&&['youtube','tiktok','instagram'].includes(a.platform)&&a.status==='done_manually')
-    .slice(0,100).map(a=>({personId:String(a.personId),platform:String(a.platform),status:'done_manually',at:String(a.at||'').slice(0,40)}));
   p.xPosted=Boolean(p.xPosted);
   return p;
 }
@@ -221,7 +211,7 @@ if(path==='/api/buffer/channels'&&method==='GET'){
   return json({organizations:result});
 }
 if(path==='/api/library'&&method==='GET')return json({library:await getLibrary(env)});
-if(path==='/api/library'&&method==='PUT'){const library=await saveLibrary(env,await request.json());await log(env,'info','コラボ相手・文章プリセットを更新');return json({library});}
+if(path==='/api/library'&&method==='PUT'){const library=await saveLibrary(env,await request.json());await log(env,'info','文章プリセットを更新');return json({library});}
 if(path==='/api/settings'&&method==='GET')return json({settings:await getSettings(env)});
 if(path==='/api/settings'&&method==='PUT'){const body=await request.json();const prev=await getSettings(env);const whitelist=['monthlyQuota','friendCount','manualUsed','spontaneousMonth','autoEnabled','bufferEnabled','lineEnabled','bufferOrganizationId','youtubeChannelId','instagramChannelId','tiktokChannelId','mediaRetentionDays'];
 for(const k of whitelist)if(body[k]!==undefined)prev[k]=body[k];prev.monthlyQuota=safeNum(prev.monthlyQuota,200);prev.manualUsed=safeNum(prev.manualUsed);prev.manualUsedMonth=jstDate().slice(0,7);prev.friendCount=safeNum(prev.friendCount);prev.mediaRetentionDays=Math.min(30,Math.max(1,safeNum(prev.mediaRetentionDays,3)));for(const k of ['autoEnabled','bufferEnabled','lineEnabled'])prev[k]=Boolean(prev[k]);const saved=await setSettings(env,prev);await log(env,'info','設定を更新しました');return json({settings:saved});}
