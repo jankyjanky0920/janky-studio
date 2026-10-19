@@ -73,7 +73,8 @@ export function createLibraryManager({getLibrary,getPosts,saveLibrary,notify,onS
     });
     root.querySelectorAll('[data-person-del]').forEach(button=>button.onclick=async()=>{
       const p=people.find(x=>x.id===button.dataset.personDel);if(!p)return;
-      if(!confirm(p.name+'をプリセットから削除しますか？既存投稿の記録にはIDが残りますが、名前は一覧から参照できなくなります。'))return;
+      if(usage(p.id).posts>0){notify('過去のコラボ履歴を保護するため、投稿で使用済みの相手は削除できません。必要なら名前・アカウントを編集してください。','error');return;}
+      if(!confirm(p.name+'をプリセットから削除しますか？'))return;
       const library=structuredClone(getLibrary());library.collaborators=library.collaborators.filter(x=>x.id!==p.id);
       await submit(library,root,'コラボ相手を削除しました');
     });
