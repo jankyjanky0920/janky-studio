@@ -42,7 +42,8 @@ export function createBulkManager({getStore,getPosts,notify,onSaved}){
     return planBulkRange({...state,existing:getPosts().filter(p=>p.kind==='vertical'&&p.stage==='scheduled'&&p.targets?.[state.channel]!==false&&p.statuses?.[state.channel]!=='skipped')});
   }
   function getDates(){
-    const open=getSummary().slots;
+    const completed=new Set(items.filter(i=>i.done).map(i=>i.date+' '+i.time));
+    const open=getSummary().slots.filter(slot=>!completed.has(slot.date+' '+slot.time));
     if(items.filter(i=>!i.done).length>open.length)throw new Error('指定期間の空き枠は'+open.length+'件です。動画を減らすか期間を延ばしてください');
     let cursor=0;return items.map(item=>item.done?{date:item.date,time:item.time}:open[cursor++]);
   }
