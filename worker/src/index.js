@@ -248,4 +248,4 @@ export default {
 };
 
 // Pure helpers are exported for offline unit tests.
-export {budget,postText,sanitizePost};
+export {budget,postText,sanitizePost,sanitizeLibrary};
