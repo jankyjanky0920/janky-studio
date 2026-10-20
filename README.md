@@ -111,6 +111,11 @@ Bufferの `sent` ステータスを取得できると「投稿確認済み」へ
 
 ## 4. LINE接続
 
+**送信せずに認証を確認する方法（v1.3）：** CloudflareのWorker Secretに `LINE_CHANNEL_ACCESS_TOKEN` を保存したら、管理画面の「設定」→「LINE 配信設定」→ **「LINE接続をテスト（送信なし）」** を押します。WorkerはLINE公式API `GET /v2/bot/info` を1回呼び出し、成功すればアカウント名・LINE IDを表示します。アクセストークンの内容やLINE友だちの情報は返しません。この確認だけでは、実際の送信・無料通数の消費・予約処理の動作はテストできません。
+
+画面に404などが出る場合は、GitHub PagesとCloudflare Workerの両方が最新コードへ再デプロイ済みか確認してください。トークンの確認が済むまで **「LINE自動送信」と「自動投稿処理」はOFF** のままにしてください。
+
+
 1. LINE公式アカウントでMessaging APIチャネルを設定します。
 2. チャネルアクセストークンをWorkersの `LINE_CHANNEL_ACCESS_TOKEN` に登録。
 3. 「設定」で推定友だち数（月初18人なら18）・月間上限200通を確認し、LINE送信と自動処理をONにします。
