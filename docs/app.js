@@ -69,7 +69,21 @@ function settingsView(){return `${headline('CONFIGURATION','設定','連携先�
 <div style="margin:12px 0"><button type="button" class="btn btn-white" id="testLineConnection" ${store.mode==='demo'?'disabled':''}>LINE接続をテスト（送信なし）</button></div>
 <div id="lineConnectionResult" aria-live="polite"></div>
 <div style="margin:12px 0"><button type="button" class="btn btn-white" id="checkLineQuota" ${store.mode==='demo'?'disabled':''}>LINEの月間配信枠を確認（送信なし）</button></div>
-<div id="lineQuotaResult" aria-live="polite"></div><div class="form-grid"><div class="field"><label for="setQuota">月間配信上限</label><input id="setQuota" type="number" min="0" value="${settings.monthlyQuota}" required/></div><div class="field"><label for="setFriends">友だち数の推定値</label><input id="setFriends" type="number" min="0" value="${settings.friendCount}" required/></div></div><div class="field"><label for="setUsed">使用済み通数の手動補正（今月）</label><input id="setUsed" type="number" min="0" value="${settings.manualUsed}"/><span class="hint">API連携時はAPI取得値と手動補正の大きい方を採用します。</span></div><div class="field"><label><input id="setLine" type="checkbox" ${settings.lineEnabled?'checked':''}/> LINE自動送信を有効化</label></div></div>
+<div id="lineQuotaResult" aria-live="polite"></div>
+<div class="notice" style="margin:16px 0">
+  <h3>本人のLINEだけにテスト送信</h3>
+  <p class="small">まず自分のLINEユーザーIDを入力して宛先を確認します。送信ボタンを明示的に押すまでは誰にも送りません。テストは1日1回・1通のみです。</p>
+  <p class="small">ユーザーIDは LINE Developers → 今回のチャネル → チャネル基本設定 → 「あなたのユーザーID」で確認できます。表示されない場合、Business IDへのLINEアカウント連携が必要です。公式アカウントを自分のLINEで友だち追加してください。</p>
+  <div class="field"><label for="lineTestUserId">自分のLINEユーザーID（Uで始まる33文字）</label>
+    <input type="password" id="lineTestUserId" placeholder="Uから始まるユーザーID" autocomplete="off" spellcheck="false"/>
+    <span class="hint">ここに入力したIDはプリセット保存や投稿履歴には記録しません。スクリーンショットやチャットには貼り付けないでください。</span>
+  </div>
+  <div class="actions" style="display:flex;gap:8px;flex-wrap:wrap">
+    <button type="button" class="btn btn-white" id="verifyLineTestRecipient" ${store.mode==='demo'?'disabled':''}>宛先アカウント名を確認（送信なし）</button>
+    <button type="button" class="btn btn-danger" id="sendLineSingleTest" disabled>確認した1人にテスト送信（1通消費）</button>
+  </div>
+  <div id="lineTestRecipientResult" aria-live="polite"></div>
+</div><div class="form-grid"><div class="field"><label for="setQuota">月間配信上限</label><input id="setQuota" type="number" min="0" value="${settings.monthlyQuota}" required/></div><div class="field"><label for="setFriends">友だち数の推定値</label><input id="setFriends" type="number" min="0" value="${settings.friendCount}" required/></div></div><div class="field"><label for="setUsed">使用済み通数の手動補正（今月）</label><input id="setUsed" type="number" min="0" value="${settings.manualUsed}"/><span class="hint">API連携時はAPI取得値と手動補正の大きい方を採用します。</span></div><div class="field"><label><input id="setLine" type="checkbox" ${settings.lineEnabled?'checked':''}/> LINE自動送信を有効化</label></div></div>
 <div class="form-section"><h2>Buffer の接続先</h2><div class="notice">先に「接続済みチャンネルを取得」を押すと、Cloudflareに保存したBuffer APIキーを使ってIDを取得できます。取得・入力だけではSNS投稿されません。</div><div style="margin:12px 0"><button type="button" class="btn btn-white" id="discoverBuffer" ${store.mode==='demo'?'disabled':''}>Bufferからチャンネルを取得（読み取りのみ）</button></div><div id="bufferDiscoveryResult" aria-live="polite"></div><div class="field"><label><input type="checkbox" id="setBuffer" ${settings.bufferEnabled?'checked':''}/> Buffer 予約登録を有効化</label></div><div class="field"><label for="setOrg">Buffer Organization ID</label><input id="setOrg" value="${escapeHTML(settings.bufferOrganizationId)}" placeholder="organization id"/></div><div class="field"><label for="setYoutube">YouTube Shorts チャンネル ID</label><input id="setYoutube" value="${escapeHTML(settings.youtubeChannelId)}" placeholder="Buffer channel ID"/></div><div class="field"><label for="setInstagram">Instagram Reels チャンネル ID</label><input id="setInstagram" value="${escapeHTML(settings.instagramChannelId)}" placeholder="Buffer channel ID"/></div><div class="field"><label for="setTiktok">TikTok チャンネル ID</label><input id="setTiktok" value="${escapeHTML(settings.tiktokChannelId)}" placeholder="Buffer channel ID"/></div></div>
 <div class="form-section"><h2>自動処理</h2><div class="field"><label><input type="checkbox" id="setAuto" ${settings.autoEnabled?'checked':''}/> 自動投稿処理を有効化（本番のみ）</label></div><div class="field"><label for="setRetention">投稿完了後のファイル保管日数</label><input id="setRetention" type="number" min="1" max="30" value="${settings.mediaRetentionDays||3}"/></div><div class="notice">自動処理を有効にすると、Workers の定期実行によって Buffer への予約登録とLINE配信を行います。テストが完了するまでオフをおすすめします。</div></div>
 <div class="form-actions"><button type="submit" class="btn btn-primary">設定を保存</button></div></form></section>
@@ -280,6 +294,69 @@ function bindSettings(){
     }finally{
       quotaButton.disabled=false;
       quotaButton.textContent='LINEの月間配信枠を確認（送信なし）';
+    }
+  };
+  let verifiedLineRecipient=null;
+  const recipientInput=$('#lineTestUserId');
+  const verifyRecipientButton=$('#verifyLineTestRecipient');
+  const singleSendButton=$('#sendLineSingleTest');
+  const testResult=$('#lineTestRecipientResult');
+  if(recipientInput)recipientInput.oninput=()=>{
+    verifiedLineRecipient=null;
+    singleSendButton.disabled=true;
+    testResult.textContent='入力内容が変更されました。再度宛先を確認してください。';
+  };
+  if(verifyRecipientButton)verifyRecipientButton.onclick=async()=>{
+    const userId=recipientInput.value.trim();
+    verifiedLineRecipient=null;
+    singleSendButton.disabled=true;
+    if(!/^U[0-9a-f]{32}$/.test(userId)){
+      testResult.textContent='LINEのユーザーIDは「U」と32桁の16進数です。LINE Developersの「あなたのユーザーID」を確認してください。';
+      return;
+    }
+    verifyRecipientButton.disabled=true;
+    verifyRecipientButton.textContent='LINEの宛先を確認中…';
+    try{
+      const response=await store.verifyLineRecipient(userId);
+      if(!response.ok){testResult.textContent=String(response.error||'宛先を確認できませんでした');return;}
+      verifiedLineRecipient={userId,displayName:response.displayName};
+      testResult.innerHTML='<div class="notice"><strong>宛先アカウント：'+escapeHTML(response.displayName)+'</strong>'
+        +'<div class="small">表示されたアカウントが自分本人であることを確認してください。この操作ではまだ送信していません。</div></div>';
+      singleSendButton.disabled=false;
+      notify('送信先のアカウント名を確認できました','success');
+    }catch(error){
+      testResult.textContent='宛先の確認に失敗しました：'+error.message;
+    }finally{
+      verifyRecipientButton.disabled=false;
+      verifyRecipientButton.textContent='宛先アカウント名を確認（送信なし）';
+    }
+  };
+  if(singleSendButton)singleSendButton.onclick=async()=>{
+    const selected=verifiedLineRecipient;
+    if(!selected||selected.userId!==recipientInput.value.trim()){
+      testResult.textContent='もう一度宛先を確認してください';
+      singleSendButton.disabled=true;return;
+    }
+    if($('#setLine')?.checked||$('#setAuto')?.checked){
+      testResult.textContent='誤送信を防ぐため、LINE自動送信と自動投稿処理をOFFにして設定を保存してください';
+      return;
+    }
+    if(!confirm('「'+selected.displayName+'」が自分のLINEアカウントであることを確認してください。\n\nこの1人にだけテストメッセージ1通を実際に送信し、月間送信枠を1通消費する可能性があります。\n\n本当に送信しますか？'))return;
+    singleSendButton.disabled=true;
+    singleSendButton.textContent='本人へのテストを送信中…';
+    try{
+      const response=await store.sendLineSingleTest(selected.userId,selected.displayName);
+      if(response.sent){
+        testResult.innerHTML='<div class="notice"><strong>✓ 1人へのテスト送信をLINE APIが受け付けました</strong><div>自分のLINEのトーク画面で受信を確認してください。自動配信は引き続きOFFです。</div></div>';
+        notify('テストメッセージの送信APIが成功しました','success');
+      }else{testResult.textContent='テスト結果を確認できませんでした。自分のLINEトーク画面を確認してください';}
+    }catch(error){
+      testResult.textContent='送信結果：'+error.message;
+      notify('LINEのテスト送信を確認できませんでした','error');
+    }finally{
+      verifiedLineRecipient=null;
+      singleSendButton.disabled=true;
+      singleSendButton.textContent='確認した1人にテスト送信（1通消費）';
     }
   };
   const discover=$('#discoverBuffer');
