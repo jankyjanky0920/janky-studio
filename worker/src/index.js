@@ -108,6 +108,56 @@ async function inspectLineQuota(env){
     return {ok:false,error:'LINEの配信枠を取得できませんでした。時間を置いて再試行し、アクセストークンの権限を確認してください'};
   }
 }
+const isLineUserId=value=>/^U[0-9a-f]{32}$/.test(String(value||''));
+async function verifyLineTestRecipient(env,userId){
+  if(!isLineUserId(userId))return {ok:false,error:'LINEのユーザーIDは U で始まる33文字の値を入力してください'};
+  if(!env.LINE_CHANNEL_ACCESS_TOKEN)return {ok:false,error:'LINE_CHANNEL_ACCESS_TOKEN が未設定です'};
+  try{
+    const response=await lineFetch(env,'/v2/bot/profile/'+encodeURIComponent(userId),{method:'GET'});
+    const data=await response.json();
+    if(typeof data.displayName!=='string'||!data.displayName.trim())throw new Error('missing profile');
+    // Do not echo back the unique LINE user ID or store it.
+    return {ok:true,displayName:data.displayName.slice(0,100)};
+  }catch{
+    return {ok:false,error:'LINEの宛先を確認できません。自分のLINEアカウントで公式アカウントを友だち追加し、ユーザーIDを確認してください'};
+  }
+}
+async function sendSingleLineTest(env,body){
+  const userId=String(body?.userId||'');
+  const displayName=String(body?.displayName||'');
+  if(!isLineUserId(userId)||!displayName||displayName.length>100)throw new Error('送信先の確認をやり直してください');
+  if(body?.confirmation!=='自分のアカウントに1通だけ送信する')throw new Error('テスト送信の確認が必要です');
+  const settings=await getSettings(env);
+  if(settings.autoEnabled||settings.lineEnabled)throw new Error('LINE自動送信と自動投稿処理をOFFにした状態でのみテストできます');
+  const person=await verifyLineTestRecipient(env,userId);
+  if(!person.ok||person.displayName!==displayName)throw new Error('送信先の表示名が変わっています。もう一度確認してください');
+  const quota=await inspectLineQuota(env);
+  if(!quota.ok||quota.monthlyLimit===null)throw new Error('LINEの月間配信枠を確認できないため、送信は中止しました');
+  const usage=await getMonthlyUsage(env,settings);
+  if(usage.used>=Math.min(settings.monthlyQuota,quota.monthlyLimit))throw new Error('配信枠が不足しているため、送信は中止しました');
+  const day=jstDate();
+  // One test push per local calendar day. Lock BEFORE the network request.
+  // Keeps an ambiguous network failure from triggering an accidental duplicate.
+  const claim=await env.DB.prepare('INSERT OR IGNORE INTO settings(id,value) VALUES(?,?)')
+    .bind('line_test_sent_'+day,nowIso()).run();
+  if(!claim.meta||claim.meta.changes!==1)throw new Error('本日のテスト送信はすでに実施済みか結果確認待ちです');
+  const recordId=await lineRecord(env,{kind:'test_push',target:1,state:'pending'});
+  const text='【JANKY Studio 接続テスト】指定した1人のLINEアカウントだけに送った確認メッセージです。';
+  try{
+    await lineFetch(env,'/v2/bot/message/push',{
+      method:'POST',headers:{'Content-Type':'application/json','X-Line-Retry-Key':crypto.randomUUID()},
+      body:JSON.stringify({to:userId,messages:[{type:'text',text}]})
+    });
+    await env.DB.prepare("UPDATE line_records SET state='sent',updated_at=? WHERE id=?")
+      .bind(nowIso(),recordId).run();
+    await log(env,'success','LINE 1人宛てのテストメッセージを送信しました');
+    return {sent:true,count:1};
+  }catch(error){
+    // Leave the consumption reserved as pending even when the outcome is unknown.
+    await log(env,'error','LINE 1人宛てのテスト送信結果を確認できませんでした。LINEのトーク画面をご確認ください');
+    throw new Error('送信結果が不明です。自動再送信はしません。LINEのトーク画面を確認してください');
+  }
+}
 async function getMonthlyUsage(env,s){let apiUsed=0,source='manual';if(env.LINE_CHANNEL_ACCESS_TOKEN){try{const r=await lineFetch(env,'/v2/bot/message/quota/consumption');apiUsed=safeNum((await r.json()).totalUsage);source='api';}catch(e){await log(env,'error',`LINE配信実績の取得失敗: ${e.message}`);}}
 const month=jstDate().slice(0,7);const rec=await env.DB.prepare("SELECT COALESCE(SUM(target_count),0) AS total FROM line_records WHERE month=? AND state IN ('accepted','pending','sent')").bind(month).first();
 // LINE API usage is approximate and may lag. The local ledger is a second lower bound.
@@ -265,6 +315,8 @@ for(const k of whitelist)if(body[k]!==undefined)prev[k]=body[k];prev.monthlyQuot
 if(path==='/api/logs'&&method==='GET'){const result=await env.DB.prepare('SELECT id,level,message,created_at as createdAt FROM logs ORDER BY created_at DESC LIMIT 100').all();return json({logs:result.results});}
 if(path==='/api/line/connection-test'&&method==='GET')return json(await testLineConnection(env));
 if(path==='/api/line/quota-check'&&method==='GET')return json(await inspectLineQuota(env));
+if(path==='/api/line/test-recipient/verify'&&method==='POST')return json(await verifyLineTestRecipient(env,(await request.json()).userId));
+if(path==='/api/line/test-recipient/send'&&method==='POST')return json(await sendSingleLineTest(env,await request.json()));
 if(path==='/api/line/usage'&&method==='GET'){return json(await getMonthlyUsage(env,await getSettings(env)));}
 if(path==='/api/line/spontaneous'&&method==='POST'){
 const s=await getSettings(env);if(!s.lineEnabled)return err('LINE送信がオフです');const text=String((await request.json()).text||'').trim();if(!text||text.length>5000)return err('本文を1〜5000文字にしてください');const month=jstDate().slice(0,7);if(s.spontaneousMonth===month)return err('今月の自発的な全員通知枠は使用済みです');const usage=await getMonthlyUsage(env,s);if(usage.used+s.friendCount>s.monthlyQuota)return err('全員に送るための無料枠が不足しています');
@@ -287,4 +339,4 @@ export default {
 };
 
 // Pure helpers are exported for offline unit tests.
-export {budget,postText,sanitizePost,sanitizeLibrary,testLineConnection,inspectLineQuota};
+export {budget,postText,sanitizePost,sanitizeLibrary,testLineConnection,inspectLineQuota,isLineUserId,verifyLineTestRecipient,sendSingleLineTest};
