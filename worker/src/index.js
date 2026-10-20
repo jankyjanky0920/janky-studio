@@ -83,6 +83,31 @@ async function testLineConnection(env){
     return {connected:false,error:'LINEのアカウント情報が不完全です'};
   return {connected:true,displayName:info.displayName.slice(0,200),basicId:info.basicId.slice(0,100)};
 }
+async function inspectLineQuota(env){
+  if(!env.LINE_CHANNEL_ACCESS_TOKEN)return {ok:false,error:'LINE_CHANNEL_ACCESS_TOKEN が設定されていません'};
+  try{
+    // Both official endpoints are GET-only; no messages are transmitted.
+    const [quotaResponse,usageResponse]=await Promise.all([
+      lineFetch(env,'/v2/bot/message/quota',{method:'GET'}),
+      lineFetch(env,'/v2/bot/message/quota/consumption',{method:'GET'})
+    ]);
+    const [quota,usage]=await Promise.all([quotaResponse.json(),usageResponse.json()]);
+    const type=quota?.type;
+    const monthlyLimit=type==='limited'&&Number.isSafeInteger(quota.value)&&quota.value>=0?quota.value:null;
+    const used=usage?.totalUsage;
+    if(!['limited','none'].includes(type)||(type==='limited'&&monthlyLimit===null)||!Number.isSafeInteger(used)||used<0)
+      return {ok:false,error:'LINEから取得した配信枠の情報が不完全です'};
+    const settings=await getSettings(env);
+    const siteLimit=safeNum(settings.monthlyQuota,200);
+    return {ok:true,limitType:type,monthlyLimit,used,
+      remaining:monthlyLimit===null?null:Math.max(0,monthlyLimit-used),
+      siteLimit,siteLimitAboveLine:monthlyLimit!==null&&siteLimit>monthlyLimit,
+      checkedAt:nowIso()};
+  }catch(error){
+    // Hide raw API response and credentials from the browser.
+    return {ok:false,error:'LINEの配信枠を取得できませんでした。時間を置いて再試行し、アクセストークンの権限を確認してください'};
+  }
+}
 async function getMonthlyUsage(env,s){let apiUsed=0,source='manual';if(env.LINE_CHANNEL_ACCESS_TOKEN){try{const r=await lineFetch(env,'/v2/bot/message/quota/consumption');apiUsed=safeNum((await r.json()).totalUsage);source='api';}catch(e){await log(env,'error',`LINE配信実績の取得失敗: ${e.message}`);}}
 const month=jstDate().slice(0,7);const rec=await env.DB.prepare("SELECT COALESCE(SUM(target_count),0) AS total FROM line_records WHERE month=? AND state IN ('accepted','pending','sent')").bind(month).first();
 // LINE API usage is approximate and may lag. The local ledger is a second lower bound.
@@ -239,6 +264,7 @@ if(path==='/api/settings'&&method==='PUT'){const body=await request.json();const
 for(const k of whitelist)if(body[k]!==undefined)prev[k]=body[k];prev.monthlyQuota=safeNum(prev.monthlyQuota,200);prev.manualUsed=safeNum(prev.manualUsed);prev.manualUsedMonth=jstDate().slice(0,7);prev.friendCount=safeNum(prev.friendCount);prev.mediaRetentionDays=Math.min(30,Math.max(1,safeNum(prev.mediaRetentionDays,3)));for(const k of ['autoEnabled','bufferEnabled','lineEnabled'])prev[k]=Boolean(prev[k]);const saved=await setSettings(env,prev);await log(env,'info','設定を更新しました');return json({settings:saved});}
 if(path==='/api/logs'&&method==='GET'){const result=await env.DB.prepare('SELECT id,level,message,created_at as createdAt FROM logs ORDER BY created_at DESC LIMIT 100').all();return json({logs:result.results});}
 if(path==='/api/line/connection-test'&&method==='GET')return json(await testLineConnection(env));
+if(path==='/api/line/quota-check'&&method==='GET')return json(await inspectLineQuota(env));
 if(path==='/api/line/usage'&&method==='GET'){return json(await getMonthlyUsage(env,await getSettings(env)));}
 if(path==='/api/line/spontaneous'&&method==='POST'){
 const s=await getSettings(env);if(!s.lineEnabled)return err('LINE送信がオフです');const text=String((await request.json()).text||'').trim();if(!text||text.length>5000)return err('本文を1〜5000文字にしてください');const month=jstDate().slice(0,7);if(s.spontaneousMonth===month)return err('今月の自発的な全員通知枠は使用済みです');const usage=await getMonthlyUsage(env,s);if(usage.used+s.friendCount>s.monthlyQuota)return err('全員に送るための無料枠が不足しています');
@@ -261,4 +287,4 @@ export default {
 };
 
 // Pure helpers are exported for offline unit tests.
-export {budget,postText,sanitizePost,sanitizeLibrary,testLineConnection};
+export {budget,postText,sanitizePost,sanitizeLibrary,testLineConnection,inspectLineQuota};
