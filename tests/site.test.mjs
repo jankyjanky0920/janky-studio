@@ -96,7 +96,7 @@ test('LINE接続確認はGETのみで実行し、アクセストークンを返�
     assert.equal(url,'https://api.line.me/v2/bot/info');
     assert.equal(options.method,'GET');
     assert.equal(options.headers.Authorization,'Bearer '+token);
-    return new Response(JSON.stringify({displayName:'テスト公式LINE',basicId:'@example',userId:'Uhidden'}),{status:200});
+    return {ok:true,status:200,json:async()=>({displayName:'テスト公式LINE',basicId:'@example',userId:'Uhidden'})};
   };
   try{
     const result=await testLineConnection({LINE_CHANNEL_ACCESS_TOKEN:token});
@@ -109,7 +109,7 @@ test('LINE接続確認では401を送信せず安全な失敗メッセージと�
   const original=globalThis.fetch;
   globalThis.fetch=async (url,options)=>{
     assert.equal(options.method,'GET');
-    return new Response('{"message":"Invalid token"}',{status:401});
+    return {ok:false,status:401,json:async()=>({message:'Invalid token'})};
   };
   try{
     const result=await testLineConnection({LINE_CHANNEL_ACCESS_TOKEN:'invalid-token'});
