@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {countBudget, DEFAULT_SETTINGS} from '../docs/data.js';
-import {budget,postText,sanitizePost,sanitizeLibrary,testLineConnection} from '../worker/src/index.js';
+import {budget,postText,sanitizePost,sanitizeLibrary,testLineConnection,inspectLineQuota} from '../worker/src/index.js';
 import {planBulkRange} from '../docs/bulk.js';
 const day='2026-10-17';
 const make=(kind,date,id)=>({id,kind,date,time:'19:00',stage:'scheduled',statuses:{line:'planned'}});
@@ -116,5 +116,45 @@ test('LINE接続確認では401を送信せず安全な失敗メッセージと�
     assert.equal(result.connected,false);
     assert.match(result.error,/アクセストークン/);
     assert.equal(JSON.stringify(result).includes('invalid-token'),false);
+  }finally{globalThis.fetch=original;}
+});
+
+test('LINEの配信枠と使用通数をGETだけで確認する',async()=>{
+  const original=globalThis.fetch;
+  const called=[];
+  globalThis.fetch=async (url,options)=>{
+    called.push({url,method:options.method});
+    if(url.endsWith('/quota'))return {ok:true,json:async()=>({type:'limited',value:200})};
+    if(url.endsWith('/quota/consumption'))return {ok:true,json:async()=>({totalUsage:33})};
+    throw new Error('unexpected URL');
+  };
+  const env={LINE_CHANNEL_ACCESS_TOKEN:'dummy-key-for-test',
+    DB:{prepare:query=>({first:async()=>({value:JSON.stringify({monthlyQuota:200})})})}};
+  try{
+    const result=await inspectLineQuota(env);
+    assert.equal(result.ok,true);
+    assert.equal(result.monthlyLimit,200);
+    assert.equal(result.used,33);
+    assert.equal(result.remaining,167);
+    assert.equal(result.siteLimit,200);
+    assert.equal(result.siteLimitAboveLine,false);
+    assert.equal(called.length,2);
+    assert.equal(called.every(x=>x.method==='GET'),true);
+    assert.equal(JSON.stringify(result).includes('dummy-key-for-test'),false);
+  }finally{globalThis.fetch=original;}
+});
+test('LINEが上限目安を返さない場合に無制限と誤表示しない',async()=>{
+  const original=globalThis.fetch;
+  globalThis.fetch=async (url,options)=>url.endsWith('/quota')?
+    {ok:true,json:async()=>({type:'none'})}:
+    {ok:true,json:async()=>({totalUsage:5})};
+  const env={LINE_CHANNEL_ACCESS_TOKEN:'dummy',
+    DB:{prepare:query=>({first:async()=>({value:JSON.stringify({monthlyQuota:200})})})}};
+  try{
+    const result=await inspectLineQuota(env);
+    assert.equal(result.ok,true);
+    assert.equal(result.monthlyLimit,null);
+    assert.equal(result.remaining,null);
+    assert.equal(result.used,5);
   }finally{globalThis.fetch=original;}
 });
