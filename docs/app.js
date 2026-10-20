@@ -67,7 +67,9 @@ function settingsView(){return `${headline('CONFIGURATION','設定','連携先�
 <div class="form-layout"><section class="panel form-panel"><form id="settingsForm"><div class="form-section"><h2>LINE 配信設定</h2>
 <div class="notice">アクセストークンをCloudflareに登録したら、送信せずにLINEへの接続を確認できます。「LINE自動送信」と「自動投稿処理」はテスト中はOFFのままにしてください。</div>
 <div style="margin:12px 0"><button type="button" class="btn btn-white" id="testLineConnection" ${store.mode==='demo'?'disabled':''}>LINE接続をテスト（送信なし）</button></div>
-<div id="lineConnectionResult" aria-live="polite"></div><div class="form-grid"><div class="field"><label for="setQuota">月間配信上限</label><input id="setQuota" type="number" min="0" value="${settings.monthlyQuota}" required/></div><div class="field"><label for="setFriends">友だち数の推定値</label><input id="setFriends" type="number" min="0" value="${settings.friendCount}" required/></div></div><div class="field"><label for="setUsed">使用済み通数の手動補正（今月）</label><input id="setUsed" type="number" min="0" value="${settings.manualUsed}"/><span class="hint">API連携時はAPI取得値と手動補正の大きい方を採用します。</span></div><div class="field"><label><input id="setLine" type="checkbox" ${settings.lineEnabled?'checked':''}/> LINE自動送信を有効化</label></div></div>
+<div id="lineConnectionResult" aria-live="polite"></div>
+<div style="margin:12px 0"><button type="button" class="btn btn-white" id="checkLineQuota" ${store.mode==='demo'?'disabled':''}>LINEの月間配信枠を確認（送信なし）</button></div>
+<div id="lineQuotaResult" aria-live="polite"></div><div class="form-grid"><div class="field"><label for="setQuota">月間配信上限</label><input id="setQuota" type="number" min="0" value="${settings.monthlyQuota}" required/></div><div class="field"><label for="setFriends">友だち数の推定値</label><input id="setFriends" type="number" min="0" value="${settings.friendCount}" required/></div></div><div class="field"><label for="setUsed">使用済み通数の手動補正（今月）</label><input id="setUsed" type="number" min="0" value="${settings.manualUsed}"/><span class="hint">API連携時はAPI取得値と手動補正の大きい方を採用します。</span></div><div class="field"><label><input id="setLine" type="checkbox" ${settings.lineEnabled?'checked':''}/> LINE自動送信を有効化</label></div></div>
 <div class="form-section"><h2>Buffer の接続先</h2><div class="notice">先に「接続済みチャンネルを取得」を押すと、Cloudflareに保存したBuffer APIキーを使ってIDを取得できます。取得・入力だけではSNS投稿されません。</div><div style="margin:12px 0"><button type="button" class="btn btn-white" id="discoverBuffer" ${store.mode==='demo'?'disabled':''}>Bufferからチャンネルを取得（読み取りのみ）</button></div><div id="bufferDiscoveryResult" aria-live="polite"></div><div class="field"><label><input type="checkbox" id="setBuffer" ${settings.bufferEnabled?'checked':''}/> Buffer 予約登録を有効化</label></div><div class="field"><label for="setOrg">Buffer Organization ID</label><input id="setOrg" value="${escapeHTML(settings.bufferOrganizationId)}" placeholder="organization id"/></div><div class="field"><label for="setYoutube">YouTube Shorts チャンネル ID</label><input id="setYoutube" value="${escapeHTML(settings.youtubeChannelId)}" placeholder="Buffer channel ID"/></div><div class="field"><label for="setInstagram">Instagram Reels チャンネル ID</label><input id="setInstagram" value="${escapeHTML(settings.instagramChannelId)}" placeholder="Buffer channel ID"/></div><div class="field"><label for="setTiktok">TikTok チャンネル ID</label><input id="setTiktok" value="${escapeHTML(settings.tiktokChannelId)}" placeholder="Buffer channel ID"/></div></div>
 <div class="form-section"><h2>自動処理</h2><div class="field"><label><input type="checkbox" id="setAuto" ${settings.autoEnabled?'checked':''}/> 自動投稿処理を有効化（本番のみ）</label></div><div class="field"><label for="setRetention">投稿完了後のファイル保管日数</label><input id="setRetention" type="number" min="1" max="30" value="${settings.mediaRetentionDays||3}"/></div><div class="notice">自動処理を有効にすると、Workers の定期実行によって Buffer への予約登録とLINE配信を行います。テストが完了するまでオフをおすすめします。</div></div>
 <div class="form-actions"><button type="submit" class="btn btn-primary">設定を保存</button></div></form></section>
@@ -247,6 +249,37 @@ function bindSettings(){
     }finally{
       lineButton.disabled=false;
       lineButton.textContent='LINE接続をテスト（送信なし）';
+    }
+  };
+  const quotaButton=$('#checkLineQuota');
+  if(quotaButton)quotaButton.onclick=async()=>{
+    const target=$('#lineQuotaResult');
+    quotaButton.disabled=true;
+    quotaButton.textContent='LINEから配信枠を取得中…';
+    try{
+      const reply=await store.checkLineQuota();
+      if(!reply.ok){
+        target.textContent='取得失敗：'+String(reply.error||'LINEの配信枠を確認できませんでした');
+        notify('配信枠を確認できませんでした','error');
+        return;
+      }
+      const limit=reply.limitType==='limited'&&Number.isSafeInteger(reply.monthlyLimit)?
+        reply.monthlyLimit.toLocaleString('ja-JP')+'通':'取得不可（上限目安の設定なし）';
+      const available=reply.remaining===null?'取得不可':Math.max(0,reply.remaining).toLocaleString('ja-JP')+'通';
+      target.innerHTML='<div class="notice"><strong>✓ LINE月間配信枠（読み取りのみ）</strong>'
+        +'<div class="kv"><span>LINE側の月間上限目安</span><strong>'+escapeHTML(limit)+'</strong></div>'
+        +'<div class="kv"><span>今月の使用済み（概算）</span><strong>'+escapeHTML(reply.used.toLocaleString('ja-JP'))+'通</strong></div>'
+        +'<div class="kv"><span>LINE側の残り（概算）</span><strong>'+escapeHTML(available)+'</strong></div>'
+        +'<div class="kv"><span>JANKY Studioの上限設定</span><strong>'+escapeHTML(reply.siteLimit.toLocaleString('ja-JP'))+'通</strong></div>'
+        +(reply.siteLimitAboveLine?'<div class="notice warn">注意：サイトの月間上限設定がLINE側の上限目安を超えています。配信を有効にする前に設定を見直してください。</div>':'')
+        +'<div class="hint">LINEの使用通数は概算・反映遅延があります。LINE Official Account Managerでも確認してください。読み取りだけなので送信は発生していません。</div></div>';
+      notify('LINEの月間配信枠を取得しました','success');
+    }catch(error){
+      target.textContent='通信エラー：'+error.message;
+      notify('配信枠の取得に失敗しました','error');
+    }finally{
+      quotaButton.disabled=false;
+      quotaButton.textContent='LINEの月間配信枠を確認（送信なし）';
     }
   };
   const discover=$('#discoverBuffer');
