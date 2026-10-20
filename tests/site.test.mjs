@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {countBudget, DEFAULT_SETTINGS} from '../docs/data.js';
-import {budget,postText,sanitizePost,sanitizeLibrary,testLineConnection,inspectLineQuota} from '../worker/src/index.js';
+import {budget,postText,sanitizePost,sanitizeLibrary,testLineConnection,inspectLineQuota,isLineUserId,verifyLineTestRecipient,sendSingleLineTest} from '../worker/src/index.js';
 import {planBulkRange} from '../docs/bulk.js';
 const day='2026-10-17';
 const make=(kind,date,id)=>({id,kind,date,time:'19:00',stage:'scheduled',statuses:{line:'planned'}});
@@ -156,5 +156,79 @@ test('LINEが上限目安を返さない場合に無制限と誤表示しない'
     assert.equal(result.monthlyLimit,null);
     assert.equal(result.remaining,null);
     assert.equal(result.used,5);
+  }finally{globalThis.fetch=original;}
+});
+
+test('本人LINE IDの形式を検証し、宛先確認ではGETだけ実行',async()=>{
+  const userId='U'+ 'a'.repeat(32),original=globalThis.fetch;
+  assert.equal(isLineUserId(userId),true);
+  assert.equal(isLineUserId('Uinvalid'),false);
+  const observed=[];
+  globalThis.fetch=async (url,options)=>{
+    observed.push({url,method:options.method});
+    return {ok:true,json:async()=>({displayName:'自分のテストLINE',userId})};
+  };
+  try{
+    const verified=await verifyLineTestRecipient({LINE_CHANNEL_ACCESS_TOKEN:'fake-test-token'},userId);
+    assert.deepEqual(verified,{ok:true,displayName:'自分のテストLINE'});
+    assert.equal(observed.length,1);
+    assert.equal(observed[0].url,'https://api.line.me/v2/bot/profile/'+userId);
+    assert.equal(observed[0].method,'GET');
+    assert.equal(JSON.stringify(verified).includes(userId),false);
+  }finally{globalThis.fetch=original;}
+});
+test('本番自動送信がONならLINEの単独テスト送信を拒否',async()=>{
+  const userId='U'+'b'.repeat(32),original=globalThis.fetch;
+  const calls=[];
+  globalThis.fetch=async(url,options)=>{
+    calls.push(url);
+    return {ok:true,json:async()=>({displayName:'本人LINE'})};
+  };
+  try{
+    await assert.rejects(async()=>sendSingleLineTest({
+      LINE_CHANNEL_ACCESS_TOKEN:'fake-test-token',
+      DB:{prepare:sql=>({first:async()=>({value:JSON.stringify({autoEnabled:true,lineEnabled:true,monthlyQuota:200})})})}
+    },{userId,displayName:'本人LINE',confirmation:'自分のアカウントに1通だけ送信する'}),/OFF/);
+    assert.equal(calls.filter(x=>x.endsWith('/push')).length,0);
+  }finally{globalThis.fetch=original;}
+});
+test('明示的確認を経て本人1人にのみ送信し、同日2回目を禁止',async()=>{
+  const userId='U'+'c'.repeat(32),original=globalThis.fetch;
+  const calls=[];let reserved=false;
+  globalThis.fetch=async(url,options)=>{
+    calls.push({url,method:options.method,body:options.body});
+    if(url.endsWith('/profile/'+userId))return {ok:true,json:async()=>({displayName:'自分のLINE'})};
+    if(url.endsWith('/quota'))return {ok:true,json:async()=>({type:'limited',value:200})};
+    if(url.endsWith('/quota/consumption'))return {ok:true,json:async()=>({totalUsage:0})};
+    if(url.endsWith('/push'))return {ok:true};
+    throw new Error('unexpected endpoint '+url);
+  };
+  const env={
+    LINE_CHANNEL_ACCESS_TOKEN:'fake-test-token',
+    DB:{prepare:sql=>({
+      bind(...args){this.args=args;return this;},
+      first:async()=>{
+        if(sql.includes("SELECT value FROM settings"))return {value:JSON.stringify({autoEnabled:false,lineEnabled:false,monthlyQuota:200,friendCount:18})};
+        if(sql.includes('COALESCE(SUM'))return {total:0};
+        return null;
+      },
+      run:async()=>{
+        if(sql.startsWith('INSERT OR IGNORE INTO settings')){if(reserved)return {meta:{changes:0}};reserved=true;return {meta:{changes:1}};}
+        return {meta:{changes:1}};
+      }
+    })}
+  };
+  const body={userId,displayName:'自分のLINE',confirmation:'自分のアカウントに1通だけ送信する'};
+  try{
+    assert.deepEqual(await sendSingleLineTest(env,body),{sent:true,count:1});
+    const pushes=calls.filter(c=>c.url.endsWith('/push'));
+    assert.equal(pushes.length,1);
+    assert.equal(pushes[0].method,'POST');
+    const sent=JSON.parse(pushes[0].body);
+    assert.equal(sent.to,userId);
+    assert.equal(sent.messages.length,1);
+    assert.equal(sent.messages[0].type,'text');
+    await assert.rejects(async()=>sendSingleLineTest(env,body),/本日のテスト送信/);
+    assert.equal(calls.filter(c=>c.url.endsWith('/push')).length,1);
   }finally{globalThis.fetch=original;}
 });
