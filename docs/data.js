@@ -108,6 +108,8 @@ export class RemoteStore {
   async listLogs(){return (await this.req('GET','/api/logs')).logs;}
   async testLineConnection(){return this.req('GET','/api/line/connection-test');}
   async checkLineQuota(){return this.req('GET','/api/line/quota-check');}
+  async verifyLineRecipient(userId){return this.req('POST','/api/line/test-recipient/verify',{userId});}
+  async sendLineSingleTest(userId,displayName){return this.req('POST','/api/line/test-recipient/send',{userId,displayName,confirmation:'自分のアカウントに1通だけ送信する'});}
   async getLineUsage(){return (await this.req('GET','/api/line/usage'));}
   async lineSend(post){return this.req('POST',`/api/posts/${encodeURIComponent(post.id)}/line/send`);}
   async spontaneous(text){return this.req('POST','/api/line/spontaneous',{text});}
