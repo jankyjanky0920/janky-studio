@@ -61,6 +61,28 @@ async function saveLibrary(env,input){
   return value;
 }
 async function lineFetch(env,path,options={}){if(!env.LINE_CHANNEL_ACCESS_TOKEN)throw new Error('LINE_CHANNEL_ACCESS_TOKEN が未設定です');const r=await fetch(`https://api.line.me${path}`,{...options,headers:{Authorization:`Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}`,...options.headers}});if(!r.ok){let error=await r.text();throw new Error(`LINE API ${r.status}: ${error.slice(0,350)}`);}return r;}
+async function testLineConnection(env){
+  // Read-only verification. This endpoint NEVER sends a LINE message.
+  if(!env.LINE_CHANNEL_ACCESS_TOKEN)return {connected:false,error:'LINE_CHANNEL_ACCESS_TOKEN がCloudflareに設定されていません'};
+  let response;
+  try{
+    response=await fetch('https://api.line.me/v2/bot/info',{
+      method:'GET',headers:{Authorization:`Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}`,Accept:'application/json'}
+    });
+  }catch{return {connected:false,error:'LINE APIに接続できませんでした。時間を置いてもう一度試してください'};}
+  if(!response.ok){
+    const reason=response.status===401?'チャネルアクセストークンが無効です。登録した値を確認してください':
+      response.status===403?'トークンに必要な権限がありません。Messaging APIチャネルを確認してください':
+      response.status===429?'LINE APIの呼び出し上限に達しました。時間を置いてください':
+      `LINE APIの応答が正常ではありません（HTTP ${response.status}）`;
+    return {connected:false,error:reason};
+  }
+  let info;
+  try{info=await response.json();}catch{return {connected:false,error:'LINEからアカウント情報を読み取れませんでした'};}
+  if(!info||typeof info.displayName!=='string'||typeof info.basicId!=='string')
+    return {connected:false,error:'LINEのアカウント情報が不完全です'};
+  return {connected:true,displayName:info.displayName.slice(0,200),basicId:info.basicId.slice(0,100)};
+}
 async function getMonthlyUsage(env,s){let apiUsed=0,source='manual';if(env.LINE_CHANNEL_ACCESS_TOKEN){try{const r=await lineFetch(env,'/v2/bot/message/quota/consumption');apiUsed=safeNum((await r.json()).totalUsage);source='api';}catch(e){await log(env,'error',`LINE配信実績の取得失敗: ${e.message}`);}}
 const month=jstDate().slice(0,7);const rec=await env.DB.prepare("SELECT COALESCE(SUM(target_count),0) AS total FROM line_records WHERE month=? AND state IN ('accepted','pending','sent')").bind(month).first();
 // LINE API usage is approximate and may lag. The local ledger is a second lower bound.
@@ -216,6 +238,7 @@ if(path==='/api/settings'&&method==='GET')return json({settings:await getSetting
 if(path==='/api/settings'&&method==='PUT'){const body=await request.json();const prev=await getSettings(env);const whitelist=['monthlyQuota','friendCount','manualUsed','spontaneousMonth','autoEnabled','bufferEnabled','lineEnabled','bufferOrganizationId','youtubeChannelId','instagramChannelId','tiktokChannelId','mediaRetentionDays'];
 for(const k of whitelist)if(body[k]!==undefined)prev[k]=body[k];prev.monthlyQuota=safeNum(prev.monthlyQuota,200);prev.manualUsed=safeNum(prev.manualUsed);prev.manualUsedMonth=jstDate().slice(0,7);prev.friendCount=safeNum(prev.friendCount);prev.mediaRetentionDays=Math.min(30,Math.max(1,safeNum(prev.mediaRetentionDays,3)));for(const k of ['autoEnabled','bufferEnabled','lineEnabled'])prev[k]=Boolean(prev[k]);const saved=await setSettings(env,prev);await log(env,'info','設定を更新しました');return json({settings:saved});}
 if(path==='/api/logs'&&method==='GET'){const result=await env.DB.prepare('SELECT id,level,message,created_at as createdAt FROM logs ORDER BY created_at DESC LIMIT 100').all();return json({logs:result.results});}
+if(path==='/api/line/connection-test'&&method==='GET')return json(await testLineConnection(env));
 if(path==='/api/line/usage'&&method==='GET'){return json(await getMonthlyUsage(env,await getSettings(env)));}
 if(path==='/api/line/spontaneous'&&method==='POST'){
 const s=await getSettings(env);if(!s.lineEnabled)return err('LINE送信がオフです');const text=String((await request.json()).text||'').trim();if(!text||text.length>5000)return err('本文を1〜5000文字にしてください');const month=jstDate().slice(0,7);if(s.spontaneousMonth===month)return err('今月の自発的な全員通知枠は使用済みです');const usage=await getMonthlyUsage(env,s);if(usage.used+s.friendCount>s.monthlyQuota)return err('全員に送るための無料枠が不足しています');
@@ -238,4 +261,4 @@ export default {
 };
 
 // Pure helpers are exported for offline unit tests.
-export {budget,postText,sanitizePost,sanitizeLibrary};
+export {budget,postText,sanitizePost,sanitizeLibrary,testLineConnection};
