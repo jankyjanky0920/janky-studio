@@ -64,7 +64,10 @@ return `${headline('MESSAGING','公式LINE 配信管理','月間200通の枠か�
 <section class="panel"><div class="panel-head"><div><h2>自発的な全員通知</h2><p>月に1回分の確保枠を使用します</p></div></div><div class="panel-body"><div class="notice ${b.S===0?'success':''}">${b.S===0?'今月の自発的通知は使用済みです。':`現在 ${b.F} 通を確保しています。このサイトから送信すると確保枠は解除されます。`}</div><form id="spontaneousForm" style="margin-top:20px"><div class="field"><label for="spontaneousText">送信メッセージ</label><textarea id="spontaneousText" placeholder="新しいお知らせがあります！" required maxlength="5000"></textarea></div><button class="btn btn-primary" type="submit" ${b.S===0?'disabled':''}>${store.mode==='demo'?'デモで送信扱い':'全員に送信する'}</button></form><div class="notice" style="margin-top:19px">動画セットの公式LINE宣伝は、本編のShorts URLを確認してから送信します。LINE向けのプレビュー動画はMP4を推奨します。</div></div></section></div>`;}
 function logsView(){return `${headline('ACTIVITY','通知・履歴','予約操作・投稿エラー・LINEの送信結果を記録します。','<button class="btn btn-white" data-refresh>⟳ 更新</button>')}<section class="panel"><div class="panel-head"><div><h2>アクティビティ</h2><p>最近のイベント 最大100件</p></div></div><div class="panel-body">${logs.length?logs.map(l=>`<div class="log-row"><span class="log-dot ${l.level==='error'?'error':l.level==='success'?'success':''}"></span><div class="log-main">${escapeHTML(l.message)}<small>${escapeHTML(new Date(l.createdAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'}))}</small></div></div>`).join(''):empty('◷','まだ履歴がありません','操作履歴や接続エラーがここに表示されます。')}</div></section>`;}
 function settingsView(){return `${headline('CONFIGURATION','設定','連携先やLINEの配信枠を管理します。APIキーはCloudflareのシークレットに登録します。')}
-<div class="form-layout"><section class="panel form-panel"><form id="settingsForm"><div class="form-section"><h2>LINE 配信設定</h2><div class="form-grid"><div class="field"><label for="setQuota">月間配信上限</label><input id="setQuota" type="number" min="0" value="${settings.monthlyQuota}" required/></div><div class="field"><label for="setFriends">友だち数の推定値</label><input id="setFriends" type="number" min="0" value="${settings.friendCount}" required/></div></div><div class="field"><label for="setUsed">使用済み通数の手動補正（今月）</label><input id="setUsed" type="number" min="0" value="${settings.manualUsed}"/><span class="hint">API連携時はAPI取得値と手動補正の大きい方を採用します。</span></div><div class="field"><label><input id="setLine" type="checkbox" ${settings.lineEnabled?'checked':''}/> LINE自動送信を有効化</label></div></div>
+<div class="form-layout"><section class="panel form-panel"><form id="settingsForm"><div class="form-section"><h2>LINE 配信設定</h2>
+<div class="notice">アクセストークンをCloudflareに登録したら、送信せずにLINEへの接続を確認できます。「LINE自動送信」と「自動投稿処理」はテスト中はOFFのままにしてください。</div>
+<div style="margin:12px 0"><button type="button" class="btn btn-white" id="testLineConnection" ${store.mode==='demo'?'disabled':''}>LINE接続をテスト（送信なし）</button></div>
+<div id="lineConnectionResult" aria-live="polite"></div><div class="form-grid"><div class="field"><label for="setQuota">月間配信上限</label><input id="setQuota" type="number" min="0" value="${settings.monthlyQuota}" required/></div><div class="field"><label for="setFriends">友だち数の推定値</label><input id="setFriends" type="number" min="0" value="${settings.friendCount}" required/></div></div><div class="field"><label for="setUsed">使用済み通数の手動補正（今月）</label><input id="setUsed" type="number" min="0" value="${settings.manualUsed}"/><span class="hint">API連携時はAPI取得値と手動補正の大きい方を採用します。</span></div><div class="field"><label><input id="setLine" type="checkbox" ${settings.lineEnabled?'checked':''}/> LINE自動送信を有効化</label></div></div>
 <div class="form-section"><h2>Buffer の接続先</h2><div class="notice">先に「接続済みチャンネルを取得」を押すと、Cloudflareに保存したBuffer APIキーを使ってIDを取得できます。取得・入力だけではSNS投稿されません。</div><div style="margin:12px 0"><button type="button" class="btn btn-white" id="discoverBuffer" ${store.mode==='demo'?'disabled':''}>Bufferからチャンネルを取得（読み取りのみ）</button></div><div id="bufferDiscoveryResult" aria-live="polite"></div><div class="field"><label><input type="checkbox" id="setBuffer" ${settings.bufferEnabled?'checked':''}/> Buffer 予約登録を有効化</label></div><div class="field"><label for="setOrg">Buffer Organization ID</label><input id="setOrg" value="${escapeHTML(settings.bufferOrganizationId)}" placeholder="organization id"/></div><div class="field"><label for="setYoutube">YouTube Shorts チャンネル ID</label><input id="setYoutube" value="${escapeHTML(settings.youtubeChannelId)}" placeholder="Buffer channel ID"/></div><div class="field"><label for="setInstagram">Instagram Reels チャンネル ID</label><input id="setInstagram" value="${escapeHTML(settings.instagramChannelId)}" placeholder="Buffer channel ID"/></div><div class="field"><label for="setTiktok">TikTok チャンネル ID</label><input id="setTiktok" value="${escapeHTML(settings.tiktokChannelId)}" placeholder="Buffer channel ID"/></div></div>
 <div class="form-section"><h2>自動処理</h2><div class="field"><label><input type="checkbox" id="setAuto" ${settings.autoEnabled?'checked':''}/> 自動投稿処理を有効化（本番のみ）</label></div><div class="field"><label for="setRetention">投稿完了後のファイル保管日数</label><input id="setRetention" type="number" min="1" max="30" value="${settings.mediaRetentionDays||3}"/></div><div class="notice">自動処理を有効にすると、Workers の定期実行によって Buffer への予約登録とLINE配信を行います。テストが完了するまでオフをおすすめします。</div></div>
 <div class="form-actions"><button type="submit" class="btn btn-primary">設定を保存</button></div></form></section>
@@ -224,6 +227,28 @@ for(const id of ['pDate','pTime','pTitle','pRoller','pMini','pHorizontalTitle','
 for(const [id,k,label] of [['videoInput','video','mainFileName'],['previewInput','preview','previewFileName']]){$('#'+id).onchange=e=>{const file=e.target.files?.[0];if(file&&!isVideo(file)){notify('動画ファイルを選択してください','error');e.target.value='';return;}editorFiles[k]=file||null;if(k==='video'){editor.thumbnailOffsetMs=0;const el=$('#mainFrameOffset');if(el)el.value='0';}else{editor.previewThumbMs=0;const el=$('#previewFrameOffset');if(el)el.value='0';}$('#'+label).textContent=file?.name||(k==='video'?'本編動画を選択':'プレビューを選択');if(file)$('#'+(k==='video'?'uploadMain':'uploadPreview')).classList.add('has-file');updatePreview();setupVideoScrubber(k);};}updatePreview();setupVideoScrubber('video');setupVideoScrubber('preview');}
 function bindSettings(){
   const form=$('#settingsForm');if(!form)return;
+  const lineButton=$('#testLineConnection');
+  if(lineButton)lineButton.onclick=async()=>{
+    const result=$('#lineConnectionResult');
+    lineButton.disabled=true;
+    lineButton.textContent='LINEに接続しています…';
+    try{
+      const response=await store.testLineConnection();
+      if(response.connected){
+        result.innerHTML='<div class="notice"><strong>✓ LINE接続成功（送信なし）</strong><div>アカウント名：'+escapeHTML(response.displayName)+'</div><div class="hint">LINE ID：'+escapeHTML(response.basicId)+'</div><div class="hint">認証確認のみ完了しました。配信や友だちへの送信テストはまだ行っていません。</div></div>';
+        notify('LINEのアクセストークンで接続できました','success');
+      }else{
+        result.textContent='LINE接続失敗：'+String(response.error||'認証を確認できませんでした');
+        notify('LINE接続を確認できませんでした','error');
+      }
+    }catch(error){
+      result.textContent='接続エラー：'+error.message;
+      notify('接続テストに失敗しました','error');
+    }finally{
+      lineButton.disabled=false;
+      lineButton.textContent='LINE接続をテスト（送信なし）';
+    }
+  };
   const discover=$('#discoverBuffer');
   if(discover)discover.onclick=async()=>{
     discover.disabled=true;discover.textContent='Bufferに問い合わせ中…';
