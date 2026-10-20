@@ -107,6 +107,7 @@ export class RemoteStore {
   async saveSettings(value){return (await this.req('PUT','/api/settings',value)).settings;}
   async listLogs(){return (await this.req('GET','/api/logs')).logs;}
   async testLineConnection(){return this.req('GET','/api/line/connection-test');}
+  async checkLineQuota(){return this.req('GET','/api/line/quota-check');}
   async getLineUsage(){return (await this.req('GET','/api/line/usage'));}
   async lineSend(post){return this.req('POST',`/api/posts/${encodeURIComponent(post.id)}/line/send`);}
   async spontaneous(text){return this.req('POST','/api/line/spontaneous',{text});}
