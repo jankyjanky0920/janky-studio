@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {countBudget, DEFAULT_SETTINGS} from '../docs/data.js';
-import {budget,postText,sanitizePost,sanitizeLibrary} from '../worker/src/index.js';
+import {budget,postText,sanitizePost,sanitizeLibrary,testLineConnection} from '../worker/src/index.js';
 import {planBulkRange} from '../docs/bulk.js';
 const day='2026-10-17';
 const make=(kind,date,id)=>({id,kind,date,time:'19:00',stage:'scheduled',statuses:{line:'planned'}});
@@ -76,20 +76,45 @@ test('既存枠を除外し終了日を越えて追加しない',()=>{
   assert.equal(range.slots.every(x=>x.date<='2026-11-02'),true);
   assert.throws(()=>planBulkRange({start:'2026-11-03',end:'2026-11-01',daily:2,times:'12:00,19:00'}),/終了日/);
 });
-test('コラボ相手のYouTube・TikTok・Instagramを同じプリセットとして保存可能',()=>{
-  const lib=sanitizeLibrary({collaborators:[{
-    id:'creator_A',name:'Aさん',youtube:'https://www.youtube.com/@creatorA',tiktok:'@creator_a',instagram:'@creator.a',notes:'以前の共同制作'
-  }],templates:[{id:'copy_01',name:'歌ってみた',title:'動画の題名',mini:'#歌い手 #高校生 #shorts',roller:'#歌い手 #高校生'}]});
-  assert.equal(lib.collaborators.length,1);
-  assert.equal(lib.collaborators[0].tiktok,'creator_a');
-  assert.equal(lib.collaborators[0].instagram,'creator.a');
-  assert.equal(lib.templates[0].roller,'#歌い手 #高校生');
+test('文章プリセットの保存では以前のコラボ情報を画面へ返さない',()=>{
+  const lib=sanitizeLibrary({collaborators:[{id:'creator_A',name:'以前の登録'}],templates:[
+    {id:'copy_01',name:'歌ってみた用',title:'曲名',mini:'#歌い手 #高校生 #shorts',roller:'#歌い手 #高校生'}
+  ]});
+  assert.deepEqual(Object.keys(lib),['templates']);
+  assert.equal(lib.templates[0].name,'歌ってみた用');
+  assert.equal(lib.templates[0].mini,'#歌い手 #高校生 #shorts');
 });
-test('コラボ招待は自動送信と扱わず手動対応の履歴のみを保存する',()=>{
-  const p=sanitizePost({kind:'vertical',stage:'draft',date:'2026-11-01',time:'19:00',title:'コラボテスト',
-    collaboratorIds:['creator_A'],collabActions:[{personId:'creator_A',platform:'youtube',status:'done_manually',at:'2026-10-19T00:00:00Z'}]
-  },null);
-  assert.deepEqual(p.collaboratorIds,['creator_A']);
-  assert.equal(p.collabActions[0].status,'done_manually');
-  assert.equal(p.collabActions.length,1);
+test('無効な文章プリセットは受け付けない',()=>{
+  assert.throws(()=>sanitizeLibrary({templates:[{id:'abc',name:'短すぎるID'}]}),/ID|不正/);
+});
+test('LINE接続確認はGETのみで実行し、アクセストークンを返さない',async()=>{
+  const original=globalThis.fetch;
+  const token='sample-secret-token-not-real';
+  let requestCount=0;
+  globalThis.fetch=async (url,options)=>{
+    requestCount++;
+    assert.equal(url,'https://api.line.me/v2/bot/info');
+    assert.equal(options.method,'GET');
+    assert.equal(options.headers.Authorization,'Bearer '+token);
+    return new Response(JSON.stringify({displayName:'テスト公式LINE',basicId:'@example',userId:'Uhidden'}),{status:200});
+  };
+  try{
+    const result=await testLineConnection({LINE_CHANNEL_ACCESS_TOKEN:token});
+    assert.deepEqual(result,{connected:true,displayName:'テスト公式LINE',basicId:'@example'});
+    assert.equal(JSON.stringify(result).includes(token),false);
+    assert.equal(requestCount,1);
+  }finally{globalThis.fetch=original;}
+});
+test('LINE接続確認では401を送信せず安全な失敗メッセージとして返す',async()=>{
+  const original=globalThis.fetch;
+  globalThis.fetch=async (url,options)=>{
+    assert.equal(options.method,'GET');
+    return new Response('{"message":"Invalid token"}',{status:401});
+  };
+  try{
+    const result=await testLineConnection({LINE_CHANNEL_ACCESS_TOKEN:'invalid-token'});
+    assert.equal(result.connected,false);
+    assert.match(result.error,/アクセストークン/);
+    assert.equal(JSON.stringify(result).includes('invalid-token'),false);
+  }finally{globalThis.fetch=original;}
 });
